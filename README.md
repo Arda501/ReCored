@@ -24,10 +24,9 @@ land on join and whenever no round is live.
 ./gradlew runServer    # dev server
 ./gradlew runClient    # dev client
 ```
-
-The mod is `environment: "*"` and **must be installed on clients too** – the beacon
+Currently works serverside only but the beacon
 hardness mixin is shared code, and clients need core positions (synced via a custom
-payload) for block-break prediction to match the server.
+payload) for block-break prediction to match the server, so installing the mod clientside aswell is recommanded. 
 
 ## Architecture
 

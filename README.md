@@ -366,4 +366,8 @@ Always:
 
 ## License
 
-CC0-1.0.
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) -
+Attribution-NonCommercial-ShareAlike. You're free to use, modify, and share
+this (including forks/derivatives), for non-commercial purposes, as long as
+you give credit and share any derivative under the same license. See
+`LICENSE` for the full legal text.

@@ -1,26 +1,26 @@
 {
 	"schemaVersion": 1,
-	"id": "cores",
+	"id": "recored",
 	"version": "${version}",
-	"name": "Cores",
+	"name": "Recored",
 	"description": "Two-team objective gamemode: destroy the enemy team's core beacons before they destroy yours.",
 	"authors": [
 		"ardaeska"
 	],
 	"contact": {},
 	"license": "CC0-1.0",
-	"icon": "assets/cores/icon.png",
+	"icon": "assets/recored/icon.png",
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"com.example.cores.CoresMod"
+			"com.example.recored.RecoredMod"
 		],
 		"client": [
-			"com.example.cores.client.CoresModClient"
+			"com.example.recored.client.RecoredModClient"
 		]
 	},
 	"mixins": [
-		"cores.mixins.json"
+		"recored.mixins.json"
 	],
 	"depends": {
 		"fabricloader": ">=0.19.5",

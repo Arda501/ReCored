@@ -1,11 +1,11 @@
-package com.example.cores.game;
+package com.example.recored.game;
 
 import net.minecraft.core.BlockPos;
 
 /**
  * An axis-aligned, inclusive block box used for spawn protection. Built from any
- * two opposite corners (order doesn't matter) - see {@code /cores pos1|pos2} and
- * {@code /cores setregion}.
+ * two opposite corners (order doesn't matter) - see {@code /recored pos1|pos2}
+ * and {@code /recored map setregion}.
  */
 public record SpawnRegion(BlockPos min, BlockPos max) {
 

@@ -15,7 +15,7 @@ loom {
 	splitEnvironmentSourceSets()
 
 	mods {
-		"cores" {
+		"recored" {
 			sourceSet sourceSets.main
 			sourceSet sourceSets.client
 		}

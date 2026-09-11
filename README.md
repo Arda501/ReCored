@@ -75,7 +75,10 @@ entirely separate from any map. Players land there on join and are sent back
 there (in Adventure mode) at the end of every round - see `GameManager.cleanupRound`,
 shared by a natural win (`endGame`) and a manual `/recored reset`. Spawn
 protection follows whichever place is actually relevant: the lobby region
-while no round is RUNNING, the active map's team spawn regions while one is.
+while no round is RUNNING, the active map's team spawn regions while one is -
+and covers both breaking (`PlayerBlockBreakEvents.BEFORE`) and building
+(block/bucket placement, via the sign-click `UseBlockCallback` in
+`RecoredMod`), both driven by the same `GameManager#isProtected`.
 
 ### Ready-up & auto-start
 
@@ -114,9 +117,10 @@ it completes with everything still holding does the round actually begin
 This auto-start is the primary way a round begins - `/recored start` still
 exists as a game-master-only **instant override** (still requires a player on
 each team and a ready map, but skips the whole ready/countdown system
-entirely, going live immediately - useful for solo testing). A natural win
-keeps the team roster for a quick rematch and re-issues everyone the "Not
-ready" item, so the same flow applies again.
+entirely, going live immediately - useful for solo testing). When a round
+ends (win or `/recored reset`), everyone is fully removed from their team -
+see "Round end" below - so a rematch means everyone runs `/recored join`
+again.
 
 ### Persistence
 
@@ -166,9 +170,9 @@ survival and hands off to `GameManager`, which:
 
 - accumulates progress on the **block** (`GameManager.coreProgress`), using the
   same per-tick formula vanilla does (`BlockState.getDestroyProgress`, driven by
-  `BeaconHardnessMixin`'s `GameManager.coreHardness` - currently `3.0F`, vanilla's
-  own default beacon hardness, i.e. standard mining duration; retune later once
-  the round-length balance is settled);
+  `BeaconHardnessMixin`'s `GameManager.coreHardness` - currently `9.0F`, triple
+  vanilla's own default beacon hardness (`3.0F`) for a tankier core; retune
+  later if the round-length balance needs adjusting);
 - keeps that progress no matter who's swinging, or if everyone stops/logs off;
 - shows it to the miner as an **action-bar message** ("Mining RED Left Core: 42%",
   the text that floats just above the hotbar) every tick they're digging - see
@@ -192,7 +196,8 @@ team assignments.)
 
 Beacons aren't in the pickaxe-mineable tag, so a tool never gives a mining-speed
 bonus on one - a diamond pickaxe mines a core exactly as fast as bare hands. That
-makes total mining time a flat `coreHardness * 30` ticks.
+makes total mining time a flat `coreHardness * 30` ticks - `9.0F` is 270 ticks
+(13.5s).
 
 Creative-mode insta-mine bypasses the mixin and is caught as a safety net in
 `PlayerBlockBreakEvents.BEFORE`, which (for **every** core removal path) breaks
@@ -259,13 +264,16 @@ runs `/recored join` again, and `leave`/team-loss removes them the same way.
 
 ### Round end
 
-When a round ends - a natural win or a manual `/recored reset` - every
-participant is sent back to the lobby in Adventure mode **with their
-inventory fully cleared** (`GameManager.cleanupRound`; no leftover kit items
-carried into the next round/lobby loitering), the map's blocks are restored
-from their saved baseline, and this round's working state (remaining cores,
-mining progress, in-progress digging) is wiped - which is also what fixes the
-sidebar HUD no longer clearing itself (see "HUD" above).
+When a round ends - a natural win or a manual `/recored reset` - both are
+handled identically by `GameManager.cleanupRound`: every participant is sent
+back to the lobby in Adventure mode with their inventory fully cleared (no
+leftover kit items carried into the lobby), **fully removed from their team**
+(roster entry + backing scoreboard team - nobody stays teamed up, or holding
+the ready-up clay ball, after a game), the map's blocks are restored from
+their saved baseline, and this round's entire working state (remaining
+cores, mining progress, in-progress digging, ready state) is wiped - which
+is also what fixes the sidebar HUD no longer clearing itself (see "HUD"
+above). A rematch means everyone runs `/recored join` again from scratch.
 
 A natural win additionally plays a short victory celebration
 (`GameManager.playVictoryCelebration`): a `ui.toast.challenge_complete`
@@ -345,24 +353,24 @@ While `RUNNING`:
 * A registered core is always breakable (by the enemy), even inside its map's spawn region, and never drops an item - destroying one triggers a firework/explosion effect and bumps the respawn delay to at least 3s for the rest of the round. Its sidebar line stays afterwards, marked DESTROYED in red strikethrough, instead of disappearing.
 * Right-clicking a core (beacon beam/effects GUI) does nothing, for anyone, at any time.
 * Breaking a team's **last** core ends the round for the other team.
-* Any other block inside the active map's spawn regions cannot be broken.
+* Any other block inside the active map's spawn regions can neither be broken **nor built on** - no placing blocks, no emptying buckets, either.
 * Death is real (death screen shown, no item drops); after a short `/recored respawndelay` pause they're auto-respawned straight to their team spawn, no click needed, with their inventory unconditionally reset to exactly their saved kit (nothing carried over, ever - not even an incomplete/empty kit).
 
 At any other time:
 
 * PVP is off entirely, even between two rostered team members.
-* Only the lobby region is break-protected (a map's own regions aren't relevant - nobody should be standing in one; see the "map territory" note below).
+* Only the lobby region is break/build-protected (a map's own regions aren't relevant - nobody should be standing in one; see the "map territory" note below).
 * Dying (however it happens) sends you back to the lobby spawn instead of vanilla's world spawn.
 * A rostered player holds the ready-up item (can't be dropped or kept out of its slot) - right-clicking it toggles ready/not-ready, and a round auto-starts once both teams are equal size (≥1 each) and everyone's ready, after a 5s abortable countdown. See "Ready-up & auto-start" above.
 
 Always:
 
 * Player names are coloured red/blue (tab list + nametag) via a backing vanilla scoreboard team.
-* When a round ends (win or `/recored reset`), every participant is switched to Adventure mode, has their **inventory fully cleared**, and is returned to the lobby; the map's blocks are restored from its saved baseline and the sidebar HUD clears - ready for another round (same or next map) without any manual cleanup. A natural win also plays a victory sound for everyone plus fireworks at the lobby spawn, and re-arms the ready-up item for the kept roster.
+* When a round ends (win or `/recored reset`), every participant is switched to Adventure mode, has their **inventory fully cleared**, is **fully removed from their team**, and is returned to the lobby; the map's blocks are restored from its saved baseline and the sidebar HUD clears - ready for another round (same or next map) without any manual cleanup. A natural win also plays a victory sound for everyone plus fireworks at the lobby spawn.
 * Both teams' core health is always visible to both teams (your own cores listed first, the enemy's below) - only the enemy-nearby blink/warning sound stays restricted to a team's own cores.
 * A sign with a command attached (`/recored sign set`) runs that command as whoever right-clicks it - the sign's own text is whatever was written on it with normal vanilla sign editing, entirely separate from the attached command.
 
-**Scope note:** spawn protection outside `RUNNING` only covers the lobby region itself - a player who wanders physically outside the lobby into an unstarted map's territory isn't blocked from breaking blocks there. In practice this shouldn't come up (players are teleported straight into the lobby on join and after every round), but it isn't actively fenced off either.
+**Scope note:** spawn protection outside `RUNNING` only covers the lobby region itself - a player who wanders physically outside the lobby into an unstarted map's territory isn't blocked from breaking or building there. In practice this shouldn't come up (players are teleported straight into the lobby on join and after every round), but it isn't actively fenced off either.
 
 ## License
 

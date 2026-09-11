@@ -24,6 +24,9 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.BucketItem;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.gamerules.GameRules;
@@ -150,6 +153,22 @@ public class RecoredMod implements ModInitializer {
 					serverPlayer.level().getServer().getCommands()
 						.performPrefixedCommand(serverPlayer.createCommandSourceStack(), command);
 					return InteractionResult.SUCCESS;
+				}
+			}
+			// No building either: block/fluid placement is denied anywhere
+			// inside the active map's spawn regions (RUNNING) or the lobby
+			// region (any other time) - the exact same regions
+			// PlayerBlockBreakEvents.BEFORE already protects from breaking,
+			// via the same GameManager#isProtected. Checks both the clicked
+			// face's block and the position a new block would actually land
+			// in (one over, in the hit direction), since a click against the
+			// region's outer boundary would otherwise place just inside it.
+			Item held = player.getItemInHand(hand).getItem();
+			if (held instanceof BlockItem || held instanceof BucketItem) {
+				GameManager gm = GameManager.INSTANCE;
+				BlockPos placePos = pos.relative(hitResult.getDirection());
+				if (gm.isProtected(pos) || gm.isProtected(placePos)) {
+					return InteractionResult.FAIL;
 				}
 			}
 			return InteractionResult.PASS;

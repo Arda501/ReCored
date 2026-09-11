@@ -172,13 +172,14 @@ public final class GameManager {
 	private int hudTick = 0;
 
 	/**
-	 * Core "hardness" fed to {@code BeaconHardnessMixin}. 3.0F is vanilla's own
-	 * default beacon hardness - standard mining duration for now. Mutable so it's
-	 * easy to retune later (beacons aren't in the pickaxe-mineable tag, so tool
-	 * choice never gives a speed bonus on one; total mining time is a flat
-	 * {@code hardness * 30} ticks).
+	 * Core "hardness" fed to {@code BeaconHardnessMixin}. Vanilla's own default
+	 * beacon hardness is {@code 3.0F}; this is tripled to make cores noticeably
+	 * tankier. Mutable so it's easy to retune later (beacons aren't in the
+	 * pickaxe-mineable tag, so tool choice never gives a speed bonus on one;
+	 * total mining time is a flat {@code hardness * 30} ticks - {@code 9.0F}
+	 * is 270 ticks, 13.5s, with bare hands or any tool alike).
 	 */
-	public float coreHardness = 3.0F;
+	public float coreHardness = 9.0F;
 
 	/**
 	 * How long a respawned team member is held before being sent on to their
@@ -665,27 +666,12 @@ public final class GameManager {
 	public void endGame(MinecraftServer server, Team winner) {
 		phase = Phase.ENDED;
 		startCountdown = -1;
-		syncCores(server);
 		cleanupRound(server); // everyone's already back in the lobby by the time the celebration below plays
-		rearmReadyItems(server); // natural win keeps team membership for a quick rematch - re-arm readiness for it
 		playVictoryCelebration(server);
 		broadcast(server, Component.literal(winner.name() + " team wins - all enemy cores destroyed!")
 			.withStyle(winner.colour()));
-		broadcast(server, Component.literal("Get ready for a rematch - right-click your clay ball to ready up.").withStyle(ChatFormatting.GRAY));
+		broadcast(server, Component.literal("The map has been reset - /recored join to play again.").withStyle(ChatFormatting.GRAY));
 		phase = Phase.WAITING;
-	}
-
-	/** Re-issue the not-ready item to every player still on a team, so a natural win's "kept roster" can ready up for a rematch. */
-	private void rearmReadyItems(MinecraftServer server) {
-		if (server == null) {
-			return;
-		}
-		for (UUID uuid : players.keySet()) {
-			ServerPlayer player = server.getPlayerList().getPlayer(uuid);
-			if (player != null) {
-				giveReadyItem(player);
-			}
-		}
 	}
 
 	/**
@@ -718,44 +704,31 @@ public final class GameManager {
 		level.playSound(null, x, y, z, SoundEvents.FIREWORK_ROCKET_LARGE_BLAST, SoundSource.MASTER, 2.0F, 1.0F);
 	}
 
-	/** Admin abort: same cleanup as a natural win, plus wiping team membership and round config entirely. */
+	/** Admin abort: identical cleanup to a natural win (see {@link #cleanupRound}). */
 	public void reset(MinecraftServer server) {
 		phase = Phase.ENDED;
 		startCountdown = -1;
-
 		cleanupRound(server);
-
-		if (server != null) {
-			for (UUID uuid : players.keySet()) {
-				ServerPlayer player = server.getPlayerList().getPlayer(uuid);
-				if (player != null) {
-					leaveScoreboardTeam(server, player);
-				}
-			}
-		}
-
-		players.clear();
-		spawns.clear();
-		spawnRegions.clear();
-		for (Team t : Team.values()) {
-			kits.put(t, Kit.EMPTY);
-		}
-		syncCores(server);
 		phase = Phase.WAITING;
 	}
 
 	/**
-	 * Shared end-of-round cleanup: send every participant back to the lobby in
-	 * adventure mode with their inventory wiped, reload the active map's saved
-	 * structure over its bounding box (undoing anything broken/built), then
-	 * free the map up for a future round. Also clears this round's working
-	 * {@link #cores}/{@link #coreProgress}/{@link #digging} and flushes an
-	 * immediate {@link #refreshHud} - without this, a natural win left the
-	 * winning team's still-standing cores (and their sidebar lines/health%)
-	 * showing indefinitely, since only a manual {@link #reset} used to clear
-	 * them. Leaves {@link #players}/{@link #spawns}/etc untouched - callers
-	 * decide whether to also clear those (a natural win keeps team membership
-	 * for a quick rematch; {@link #reset} wipes everything).
+	 * Shared end-of-round cleanup, run by both a natural win and a manual
+	 * {@link #reset} - the two are otherwise identical: every participant is
+	 * switched to Adventure mode, has their inventory wiped, is sent back to
+	 * the lobby, and is fully removed from their team (roster entry +
+	 * backing scoreboard team) - nobody is left "still on a team" or holding
+	 * a stale ready-up item after a round ends, which used to only happen on
+	 * a manual reset (a natural win previously kept the roster "for a quick
+	 * rematch", which was the actual cause of players occasionally finding
+	 * themselves still teamed up, clay ball and all, after a game). The
+	 * active map's saved structure is reloaded over its bounding box (undoing
+	 * anything broken/built), the map is freed up for a future round, and
+	 * this round's entire working state ({@link #spawns}, {@link #cores},
+	 * {@link #kits}, mining progress, digging, pending respawns, ready
+	 * state) is wiped. Ends with a fresh {@link #syncCores} + {@link
+	 * #refreshHud} so clients/the sidebar reflect the now-empty state
+	 * immediately rather than showing stale data until the next round.
 	 */
 	private void cleanupRound(MinecraftServer server) {
 		if (server != null) {
@@ -766,6 +739,7 @@ public final class GameManager {
 					player.getInventory().clearContent();
 					player.containerMenu.broadcastChanges();
 					sendToLobby(player);
+					leaveScoreboardTeam(server, player);
 				}
 			}
 		}
@@ -776,8 +750,12 @@ public final class GameManager {
 		}
 		MapRegistry.INSTANCE.clearActive();
 
+		players.clear();
+		spawns.clear();
+		spawnRegions.clear();
 		for (Team t : Team.values()) {
 			cores.get(t).clear();
+			kits.put(t, Kit.EMPTY);
 		}
 		destroyedCores.clear();
 		coreProgress.clear();
@@ -785,6 +763,7 @@ public final class GameManager {
 		pendingRespawns.clear();
 		readyPlayers.clear();
 		if (server != null) {
+			syncCores(server);
 			refreshHud(server);
 		}
 	}

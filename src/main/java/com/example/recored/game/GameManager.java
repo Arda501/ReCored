@@ -25,6 +25,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.numbers.BlankFormat;
 import net.minecraft.network.protocol.game.ServerboundClientCommandPacket;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -33,6 +34,9 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Relative;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ItemStack;
@@ -42,6 +46,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.Objective;
+import net.minecraft.world.scores.PlayerScoreEntry;
 import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.ScoreAccess;
 import net.minecraft.world.scores.ScoreHolder;
@@ -89,6 +94,18 @@ public final class GameManager {
 	/** {@code CustomData} tag key marking an item stack as our ready/not-ready indicator - see {@link #isReadyMarkerStack}. */
 	private static final String READY_MARKER_KEY = "recored_ready_item";
 
+	/**
+	 * Beacon's real, unmodified vanilla hardness ({@code Blocks.BEACON}'s own
+	 * {@code .strength(3.0F)}) - what a vanilla client (with no mod installed)
+	 * actually perceives, since nothing overrides it anymore. See {@link
+	 * #coreHardness} for how the *effective* mining time is actually tripled
+	 * without touching this.
+	 */
+	private static final float VANILLA_BEACON_HARDNESS = 3.0F;
+
+	/** Id of the transient {@code Attributes.BLOCK_BREAK_SPEED} modifier applied while actively mining a core - see {@link #startDigging}. */
+	private static final Identifier MINING_SLOWDOWN_ID = Identifier.fromNamespaceAndPath(RecoredMod.MOD_ID, "core_mining_slowdown");
+
 	private GameManager() {
 	}
 
@@ -113,11 +130,14 @@ public final class GameManager {
 	public final Map<Team, Kit> kits = new EnumMap<>(Team.class);
 
 	/**
-	 * Flattened view of every core position, regardless of team. This is the set
-	 * {@code BeaconHardnessMixin} consults, and the only game state the client is
-	 * told about (via {@link CoreSyncPayload}). Rebuilt from {@link #cores} on the
-	 * server by {@link #syncCores}; replaced wholesale on the client by
-	 * {@link #applyClientSync}.
+	 * Flattened view of every core position, regardless of team. Consulted by
+	 * {@code CoreProtectionMixin} to decide whether a block is a core at all,
+	 * and the only game state a client is told about (via {@link
+	 * CoreSyncPayload}) - purely optional, since clients don't need this mod
+	 * installed; a modded client that does opt in gets the client-side "can't
+	 * even start mining your own core" cosmetic on top. Rebuilt from {@link
+	 * #cores} on the server by {@link #syncCores}; replaced wholesale on the
+	 * client by {@link #applyClientSync}.
 	 */
 	public final Set<BlockPos> hardenedCores = new HashSet<>();
 
@@ -172,12 +192,25 @@ public final class GameManager {
 	private int hudTick = 0;
 
 	/**
-	 * Core "hardness" fed to {@code BeaconHardnessMixin}. Vanilla's own default
-	 * beacon hardness is {@code 3.0F}; this is tripled to make cores noticeably
-	 * tankier. Mutable so it's easy to retune later (beacons aren't in the
-	 * pickaxe-mineable tag, so tool choice never gives a speed bonus on one;
-	 * total mining time is a flat {@code hardness * 30} ticks - {@code 9.0F}
-	 * is 270 ticks, 13.5s, with bare hands or any tool alike).
+	 * The mining duration a core should <em>behave</em> as if it had, expressed
+	 * as an equivalent hardness (total time = {@code coreHardness * 30} ticks,
+	 * same formula as vanilla; beacons aren't in the pickaxe-mineable tag, so
+	 * tool choice never gives a speed bonus - {@code 9.0F} is 270 ticks/13.5s,
+	 * triple vanilla's own {@code 3.0F} beacon default, with any tool alike).
+	 *
+	 * <p>This does <b>not</b> touch the beacon's actual registered hardness
+	 * ({@link #VANILLA_BEACON_HARDNESS} stays what it really is, everywhere) -
+	 * since clients don't have this mod installed, only the server could ever
+	 * see an overridden hardness, and a vanilla client mining "faster" than
+	 * the server thinks is exactly what used to cause the block to visibly
+	 * break and pop back repeatedly. Instead, {@link #startDigging} applies a
+	 * transient {@code Attributes.BLOCK_BREAK_SPEED} modifier - a real,
+	 * synced-to-the-client vanilla mechanic - to slow the miner down by
+	 * exactly {@code VANILLA_BEACON_HARDNESS / coreHardness} while they're
+	 * actively digging a core. Both the vanilla client's own local prediction
+	 * and this server's {@link #applyMiningTick} read the *same* real block
+	 * hardness and the *same* synced attribute value, so they agree on the
+	 * total time throughout - not just eventually.
 	 */
 	public float coreHardness = 9.0F;
 
@@ -257,7 +290,7 @@ public final class GameManager {
 		return null;
 	}
 
-	/** Consulted by {@code BeaconHardnessMixin} on both sides. */
+	/** Consulted by {@code CoreProtectionMixin} on both sides. */
 	public boolean isHardenedCore(BlockPos pos) {
 		return hardenedCores.contains(pos);
 	}
@@ -739,9 +772,20 @@ public final class GameManager {
 					player.getInventory().clearContent();
 					player.containerMenu.broadcastChanges();
 					sendToLobby(player);
-					leaveScoreboardTeam(server, player);
 				}
 			}
+			// A team-wide sweep, not a per-player leaveScoreboardTeam call -
+			// deliberately: a player who disconnected mid-round (RUNNING keeps
+			// their roster entry for reconnect support - see handleDisconnect)
+			// has no live ServerPlayer here, so a per-player call would have
+			// silently skipped them, leaving their *vanilla* team membership
+			// stuck forever (our own players map is still cleared below
+			// either way) - exactly the "still on a team after a game"
+			// symptom, but only when the round ended while they were offline.
+			// This instead removes every current member of either backing
+			// team by name, the same proven pattern setupHud already uses for
+			// the equivalent post-restart case.
+			clearScoreboardTeams(server);
 		}
 
 		MapConfig activeMap = MapRegistry.INSTANCE.activeMap();
@@ -866,6 +910,34 @@ public final class GameManager {
 	/** Called from {@code CoreMiningMixin} when a player starts holding left-click on a core. */
 	public void startDigging(ServerPlayer player, BlockPos pos) {
 		digging.put(player.getUUID(), pos);
+		startMiningSlowdown(player);
+	}
+
+	/**
+	 * Applies (or refreshes) the {@code Attributes.BLOCK_BREAK_SPEED} slowdown
+	 * that makes a vanilla client's own local mining prediction agree with
+	 * this server's real, longer mining time - see {@link #coreHardness}'s
+	 * doc. Idempotent - safe to call repeatedly while already digging.
+	 */
+	private void startMiningSlowdown(ServerPlayer player) {
+		AttributeInstance attribute = player.getAttribute(Attributes.BLOCK_BREAK_SPEED);
+		if (attribute == null) {
+			return;
+		}
+		double multiplier = VANILLA_BEACON_HARDNESS / coreHardness;
+		attribute.addOrUpdateTransientModifier(
+			new AttributeModifier(MINING_SLOWDOWN_ID, multiplier - 1.0, AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL));
+	}
+
+	/** Removes the mining slowdown applied by {@link #startMiningSlowdown} - safe to call even if it was never applied. */
+	private void stopMiningSlowdown(@Nullable ServerPlayer player) {
+		if (player == null) {
+			return;
+		}
+		AttributeInstance attribute = player.getAttribute(Attributes.BLOCK_BREAK_SPEED);
+		if (attribute != null) {
+			attribute.removeModifier(MINING_SLOWDOWN_ID);
+		}
 	}
 
 	/**
@@ -886,6 +958,7 @@ public final class GameManager {
 	 */
 	public void stopDigging(ServerPlayer player, BlockPos pos) {
 		digging.remove(player.getUUID());
+		stopMiningSlowdown(player);
 		applyMiningTick(player.level().getServer(), player, pos);
 	}
 
@@ -911,10 +984,12 @@ public final class GameManager {
 			ServerPlayer player = server.getPlayerList().getPlayer(playerId);
 			if (player == null || coreOwnerAt(pos) == null) {
 				digging.remove(playerId); // logged off, or the core is already gone
+				stopMiningSlowdown(player);
 				continue;
 			}
 			if (player.level().getBlockState(pos).getBlock() != Blocks.BEACON) {
 				digging.remove(playerId);
+				stopMiningSlowdown(player);
 				continue;
 			}
 			applyMiningTick(server, player, pos);
@@ -932,8 +1007,9 @@ public final class GameManager {
 		if (state.getBlock() != Blocks.BEACON) {
 			return;
 		}
-		// Same formula vanilla uses (player speed / block hardness / correct-tool
-		// modifier); BeaconHardnessMixin is what makes the hardness configurable.
+		// The exact same formula (and the exact same real block hardness +
+		// synced attribute value) a vanilla client uses for its own local
+		// prediction - see coreHardness's doc for why that's deliberate.
 		float perTick = state.getDestroyProgress(player, level, pos);
 		float total = Math.min(1.0F, coreProgress.getOrDefault(pos, 0.0F) + perTick);
 		if (total >= 1.0F) {
@@ -964,7 +1040,7 @@ public final class GameManager {
 		cores.get(owner).remove(side);
 		// Keeps its sidebar line - see coreLine - instead of just vanishing.
 		destroyedCores.put(pos, new DestroyedCore(owner, side));
-		clearCoreProgress(pos);
+		clearCoreProgress(server, pos);
 		level.destroyBlock(pos, false, breaker, 512); // false = no item drop
 		playDestructionEffect(level, pos);
 		// The fight gets a beat slower once cores start falling.
@@ -978,9 +1054,17 @@ public final class GameManager {
 		refreshHud(server);
 	}
 
-	private void clearCoreProgress(BlockPos pos) {
+	/** Also lifts the mining slowdown (see {@link #startMiningSlowdown}) from anyone who was mining {@code pos} when it broke. */
+	private void clearCoreProgress(MinecraftServer server, BlockPos pos) {
 		coreProgress.remove(pos);
-		digging.values().removeIf(p -> p.equals(pos));
+		Iterator<Map.Entry<UUID, BlockPos>> it = digging.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<UUID, BlockPos> entry = it.next();
+			if (entry.getValue().equals(pos)) {
+				stopMiningSlowdown(server.getPlayerList().getPlayer(entry.getKey()));
+				it.remove();
+			}
+		}
 	}
 
 	/** Fireworks-like particle burst + an explosion boom at a destroyed core. */
@@ -1011,9 +1095,30 @@ public final class GameManager {
 	 * was on a team last time the server was up would still see that team's
 	 * sidebar (and coloured name) on rejoin despite never having run {@code
 	 * /recored join} this session.
+	 *
+	 * <p>Also purges any score entry on a team's objective that isn't in our
+	 * current {@code "<team>_line_<n>"} naming scheme - a saved scoreboard.dat
+	 * can carry entries left over from an earlier version of this mod (e.g. a
+	 * long-gone {@code "<team>_core_<n>"} scheme), which would otherwise sit
+	 * on the sidebar forever alongside the real lines, since nothing else ever
+	 * touches an entry under a name {@link #refreshHud} doesn't recognise.
+	 * {@link #refreshHud} itself decides whether the sidebar is even shown at
+	 * all (only while {@link Phase#RUNNING}) - this call doesn't display it.
 	 */
 	public void setupHud(MinecraftServer server) {
 		Scoreboard scoreboard = server.getScoreboard();
+
+		// Orphaned objectives from before the mod was renamed from "Cores" to
+		// "Recored" - dead weight, never assigned to a display slot by any
+		// version of this code anymore, but they'd sit in scoreboard.dat
+		// forever otherwise.
+		for (String legacyName : new String[] {"cores_hud_red", "cores_hud_blue"}) {
+			Objective legacy = scoreboard.getObjective(legacyName);
+			if (legacy != null) {
+				scoreboard.removeObjective(legacy);
+			}
+		}
+
 		for (Team team : Team.values()) {
 			String name = HUD_OBJECTIVE_PREFIX + team.lowerName();
 			Objective objective = scoreboard.getObjective(name);
@@ -1027,7 +1132,13 @@ public final class GameManager {
 					BlankFormat.INSTANCE);
 			}
 			hudObjectives.put(team, objective);
-			scoreboard.setDisplayObjective(team.teamColor().displaySlot(), objective);
+
+			String currentLinePrefix = team.lowerName() + "_line_";
+			for (PlayerScoreEntry entry : new ArrayList<>(scoreboard.listPlayerScores(objective))) {
+				if (!entry.owner().startsWith(currentLinePrefix)) {
+					scoreboard.resetSinglePlayerScore(ScoreHolder.forNameOnly(entry.owner()), objective);
+				}
+			}
 
 			PlayerTeam scoreboardTeam = ensureScoreboardTeam(server, team);
 			for (String staleMember : new ArrayList<>(scoreboardTeam.getPlayers())) {
@@ -1049,15 +1160,43 @@ public final class GameManager {
 	 * A destroyed core keeps its row (struck through, red - see {@link
 	 * #coreLine}) instead of disappearing; each row is also marked with a
 	 * small coloured square for its owning team.
+	 *
+	 * <p>The sidebar itself is only ever shown while {@link Phase#RUNNING} -
+	 * joining a team (or sitting in the lobby waiting/readying up) shouldn't
+	 * already show a HUD for a round that hasn't started. Outside RUNNING
+	 * this unassigns both display slots and clears every line, then returns;
+	 * {@link #cleanupRound}'s own call into this right after a round ends is
+	 * what makes that transition immediate rather than waiting up to {@link
+	 * #HUD_REFRESH_TICKS}.
 	 */
 	private void refreshHud(MinecraftServer server) {
 		if (server == null) {
 			return;
 		}
+		Scoreboard scoreboard = server.getScoreboard();
+		if (phase != Phase.RUNNING) {
+			for (Team team : Team.values()) {
+				Objective objective = hudObjectives.get(team);
+				if (objective == null) {
+					continue;
+				}
+				scoreboard.setDisplayObjective(team.teamColor().displaySlot(), null);
+				for (int line = 0; line < MAX_HUD_LINES * 2; line++) {
+					scoreboard.resetSinglePlayerScore(ScoreHolder.forNameOnly(team.lowerName() + "_line_" + line), objective);
+				}
+			}
+			return;
+		}
+		for (Team team : Team.values()) {
+			Objective objective = hudObjectives.get(team);
+			if (objective != null) {
+				scoreboard.setDisplayObjective(team.teamColor().displaySlot(), objective);
+			}
+		}
+
 		boolean blinkOn = (hudTick / (HUD_REFRESH_TICKS * BLINK_HALF_PERIOD)) % 2 == 0;
 		boolean playWarningSound = hudTick % WARNING_SOUND_TICKS < HUD_REFRESH_TICKS;
 		ServerLevel level = server.overworld();
-		Scoreboard scoreboard = server.getScoreboard();
 
 		// Enemy-nearby is a property of a still-standing core itself (owner vs.
 		// everyone else), computed once per core regardless of how many
@@ -1204,6 +1343,24 @@ public final class GameManager {
 
 	public void leaveScoreboardTeam(MinecraftServer server, ServerPlayer player) {
 		server.getScoreboard().removePlayerFromTeam(player.getScoreboardName());
+	}
+
+	/**
+	 * Removes every current member of both backing scoreboard teams, by name -
+	 * unlike {@link #leaveScoreboardTeam}, this needs no live {@link
+	 * ServerPlayer} for whoever it removes, so it also catches a player who
+	 * disconnected mid-round and hasn't reconnected yet. Used by {@link
+	 * #cleanupRound} for exactly that reason; {@link #setupHud} does the same
+	 * thing for the equivalent post-restart case.
+	 */
+	private void clearScoreboardTeams(MinecraftServer server) {
+		Scoreboard scoreboard = server.getScoreboard();
+		for (Team team : Team.values()) {
+			PlayerTeam scoreboardTeam = ensureScoreboardTeam(server, team);
+			for (String member : new ArrayList<>(scoreboardTeam.getPlayers())) {
+				scoreboard.removePlayerFromTeam(member, scoreboardTeam);
+			}
+		}
 	}
 
 	private void broadcast(MinecraftServer server, Component message) {

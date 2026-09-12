@@ -27,7 +27,12 @@ Play at IP: goodoldmc.com
 ./gradlew runServer    # dev server
 ./gradlew runClient    # dev client
 ```
-Currently works serverside but the beacon hardness mixin is shared code, and clients need core positions (synced via a custom payload) for block-break prediction to match the server, so installing the mod clientside aswell is recommanded. 
+Designed to run **server-only** - players connect with a plain vanilla
+client, nothing to install. Core mining specifically is built to work
+correctly against an unmodified client (see "Core mining" below for how);
+installing the mod client-side too is entirely optional and only adds one
+small cosmetic - your own team's core visually refuses to even start mining
+(`CoreProtectionMixin`) instead of the crack overlay just doing nothing.
 
 ## Architecture
 
@@ -43,7 +48,6 @@ Currently works serverside but the beacon hardness mixin is shared code, and cli
 | `/recored` commands (join/leave/status/pos1/pos2/setlobby/start/reset/respawndelay) | `command/RecoredCommand.java` |
 | `/recored map ...` commands | `command/MapCommand.java` |
 | Block-break rules + death/respawn/join wiring | `RecoredMod.java` |
-| Beacon hardness mixin | `mixin/BeaconHardnessMixin.java` |
 | Persistent core-mining mixin | `mixin/CoreMiningMixin.java` |
 | "Can't touch your own core" mixin (client + server) | `mixin/CoreProtectionMixin.java` |
 | Client-sync payload | `net/CoreSyncPayload.java`, `client/RecoredModClient.java` |
@@ -170,10 +174,11 @@ team objective. `CoreMiningMixin` cancels vanilla's handling for core blocks in
 survival and hands off to `GameManager`, which:
 
 - accumulates progress on the **block** (`GameManager.coreProgress`), using the
-  same per-tick formula vanilla does (`BlockState.getDestroyProgress`, driven by
-  `BeaconHardnessMixin`'s `GameManager.coreHardness` - currently `9.0F`, triple
-  vanilla's own default beacon hardness (`3.0F`) for a tankier core; retune
-  later if the round-length balance needs adjusting);
+  same per-tick formula vanilla does (`BlockState.getDestroyProgress`) - see
+  "Mining a hardened core with a vanilla client" below for how the actual
+  *duration* (`GameManager.coreHardness`, currently `9.0F` - triple vanilla's
+  own beacon default of `3.0F`; retune later if the round-length balance
+  needs adjusting) is achieved without needing anything installed client-side;
 - keeps that progress no matter who's swinging, or if everyone stops/logs off;
 - shows it to the miner as an **action-bar message** ("Mining RED Left Core: 42%",
   the text that floats just above the hotbar) every tick they're digging - see
@@ -183,22 +188,52 @@ survival and hands off to `GameManager`, which:
   and for anyone via creative insta-mine in the `PlayerBlockBreakEvents.BEFORE`
   safety net.
 
-Your own core doesn't just fail to break - `CoreProtectionMixin` makes it
-behave like an adventure-mode-restricted block *for your team specifically*, by
-overriding `Player#blockActionRestricted` (the exact check both the server and
-the client's own local `MultiPlayerGameMode` independently consult before even
-starting to mine). That means the mining animation/crack overlay never starts
-client-side either - it's not "mines forever and does nothing", it's "can't be
-mined at all", same as punching bedrock. (`Player` is shared code, so one mixin
-covers both sides; ownership is checked against the authoritative `cores` map
-server-side, and against a small per-player synced set - `GameManager.ownCores`,
-part of `CoreSyncPayload` - client-side, since the client doesn't otherwise know
-team assignments.)
+That own-core refusal is enforced server-side regardless (mining one just
+never progresses, ever), but if a client also has the mod installed (still
+entirely optional), `CoreProtectionMixin` additionally makes it behave like
+an adventure-mode-restricted block *for your team specifically* - overriding
+`Player#blockActionRestricted` (the exact check both the server and a modded
+client's own local `MultiPlayerGameMode` independently consult before even
+starting to mine) so the mining animation/crack overlay never starts at all,
+rather than just never finishing. Ownership is checked against the
+authoritative `cores` map server-side, and against a small per-player synced
+set - `GameManager.ownCores`, part of `CoreSyncPayload` - on a modded client,
+since it doesn't otherwise know team assignments.
 
-Beacons aren't in the pickaxe-mineable tag, so a tool never gives a mining-speed
-bonus on one - a diamond pickaxe mines a core exactly as fast as bare hands. That
-makes total mining time a flat `coreHardness * 30` ticks - `9.0F` is 270 ticks
-(13.5s).
+#### Mining a hardened core with a vanilla client
+
+A core needs to take noticeably longer to mine than a real vanilla beacon
+(`coreHardness`, above) - but changing a block's actual registered hardness is
+data a vanilla client already has baked in and can't be told otherwise
+without a resource/data pack it doesn't have. So `BeaconHardnessMixin` (an
+earlier version of this mod) tried to fake the hardness server-side only,
+which meant an unmodified client kept predicting completion at the real,
+much shorter vanilla time - repeatedly finishing its own local mining
+animation, optimistically hiding the block, getting corrected once the
+server's ack disagreed, and popping the block back - and vanilla doesn't
+auto-resume mining on the same held-down click once it's finished (even
+speculatively), so the player had to release and click again every cycle.
+
+The actual fix doesn't touch the block's hardness at all - `Blocks.BEACON`'s
+real `3.0F` is left alone and used by both sides identically. Instead, the
+moment a player starts digging an (enemy) core, `GameManager.startDigging`
+applies a transient modifier to their **`Attributes.BLOCK_BREAK_SPEED`**
+attribute - a real, per-player vanilla mechanic, synced to the client
+automatically like any other attribute, no mod required to receive it - that
+slows their effective mining speed by exactly `3.0F / coreHardness` for as
+long as they keep digging (removed the moment they stop, in every path that
+can end it: release/abort, the core breaking, disconnecting, or the tick
+loop noticing the block or target changed). Since a vanilla client's own
+local mining prediction reads the *same* real block hardness and the *same*
+synced attribute value as the server's `applyMiningTick`, both sides now
+agree on the total mining time throughout - not just by coincidence at the
+very end - so the core mines start-to-finish in one continuous hold, exactly
+like mining any ordinary block.
+
+Beacons aren't in the pickaxe-mineable tag either way, so a tool never gives
+a mining-speed bonus on one - a diamond pickaxe mines a core exactly as fast
+as bare hands, and the flat `coreHardness * 30`-tick total (`9.0F` is 270
+ticks, 13.5s) applies regardless of what's in your hand.
 
 Creative-mode insta-mine bypasses the mixin and is caught as a safety net in
 `PlayerBlockBreakEvents.BEFORE`, which (for **every** core removal path) breaks
@@ -248,20 +283,39 @@ happens the same tick, not up to 5 ticks later). The whole sidebar clears the
 moment a round ends (see "Round end" below) - it doesn't keep showing the
 last round's numbers into the next one.
 
-Sidebar visibility is entirely driven by **vanilla scoreboard team
-membership**, not by `GameManager`'s own in-memory team map (see the client's
-`Hud#extractScoreboardSidebar`: it looks up the local player's
-`scoreboard.getPlayersTeam(...)`, and only then resolves that team's colour
-to a `DisplaySlot` - no team, no sidebar). Vanilla scoreboard team membership
-persists in `scoreboard.dat` across restarts; `GameManager`'s own player/team
-map does not. So on a restart, a player who had joined a team before could
-come back with a *stale* vanilla team assignment while `GameManager` itself
-has forgotten them entirely - the sidebar (and colored nametag) would then
-show even though they're no longer actually "in" a team as far as the mod is
-concerned. `setupHud` fixes this by clearing every player out of both
-scoreboard teams (`recored_red`/`recored_blue`) at every `SERVER_STARTED`,
-before anyone can join - the sidebar/nametag only reappear once a player
-runs `/recored join` again, and `leave`/team-loss removes them the same way.
+**The sidebar is only ever shown while a round is actually `RUNNING`** -
+`refreshHud` unassigns both `DisplaySlot.TEAM_RED`/`TEAM_BLUE` entirely
+(`setDisplayObjective(slot, null)`) and clears every line whenever the phase
+isn't RUNNING, so joining a team, sitting in the lobby, or readying up don't
+show a HUD for a round that hasn't started yet - it only appears the instant
+`beginStart` flips to RUNNING, and disappears again the instant the round
+ends.
+
+Sidebar visibility to a given *player* is separately gated by **vanilla
+scoreboard team membership** (see the client's `Hud#extractScoreboardSidebar`:
+it looks up the local player's `scoreboard.getPlayersTeam(...)`, and only
+then resolves that team's colour to a `DisplaySlot` - no team, no sidebar,
+regardless of whether anything is even assigned there). Vanilla scoreboard
+team membership persists in `scoreboard.dat` across restarts; `GameManager`'s
+own player/team map does not. So on a restart, a player who had joined a team
+before could come back with a *stale* vanilla team assignment while
+`GameManager` itself has forgotten them entirely - the sidebar (and colored
+nametag) would then show even though they're no longer actually "in" a team
+as far as the mod is concerned. `setupHud` fixes this by clearing every
+player out of both scoreboard teams (`recored_red`/`recored_blue`) at every
+`SERVER_STARTED`, before anyone can join - the sidebar/nametag only reappear
+once a player runs `/recored join` again, and `leave`/team-loss removes them
+the same way.
+
+`setupHud` also purges anything left in `scoreboard.dat` from an earlier
+version of this mod that would otherwise sit there forever, invisible to the
+code but not to a viewer: the entire orphaned `cores_hud_red`/`cores_hud_blue`
+objectives from before the "Cores" → "Recored" rename, and - inside the two
+*current* objectives - any individual score entry whose name doesn't match
+today's `"<team>_line_<n>"` scheme (e.g. an old `"blue_core_0"`/`"blue_core_1"`
+entry from a since-changed naming convention), which would otherwise show up
+as permanent extra lines (health-frozen at whatever they last were) alongside
+the real, current ones.
 
 ### Round end
 
@@ -356,6 +410,7 @@ While `RUNNING`:
 * Breaking a team's **last** core ends the round for the other team.
 * Any other block inside the active map's spawn regions can neither be broken **nor built on** - no placing blocks, no emptying buckets, either.
 * Death is real (death screen shown, no item drops); after a short `/recored respawndelay` pause they're auto-respawned straight to their team spawn, no click needed, with their inventory unconditionally reset to exactly their saved kit (nothing carried over, ever - not even an incomplete/empty kit).
+* The sidebar HUD is shown (only now - see "HUD" above) with both teams' core health always visible to both teams (your own cores listed first, the enemy's below) - only the enemy-nearby blink/warning sound stays restricted to a team's own cores.
 
 At any other time:
 
@@ -368,7 +423,6 @@ Always:
 
 * Player names are coloured red/blue (tab list + nametag) via a backing vanilla scoreboard team.
 * When a round ends (win or `/recored reset`), every participant is switched to Adventure mode, has their **inventory fully cleared**, is **fully removed from their team**, and is returned to the lobby; the map's blocks are restored from its saved baseline and the sidebar HUD clears - ready for another round (same or next map) without any manual cleanup. A natural win also plays a victory sound for everyone plus fireworks at the lobby spawn.
-* Both teams' core health is always visible to both teams (your own cores listed first, the enemy's below) - only the enemy-nearby blink/warning sound stays restricted to a team's own cores.
 * A sign with a command attached (`/recored sign set`) runs that command as whoever right-clicks it - the sign's own text is whatever was written on it with normal vanilla sign editing, entirely separate from the attached command.
 
 **Scope note:** spawn protection outside `RUNNING` only covers the lobby region itself - a player who wanders physically outside the lobby into an unstarted map's territory isn't blocked from breaking or building there. In practice this shouldn't come up (players are teleported straight into the lobby on join and after every round), but it isn't actively fenced off either.

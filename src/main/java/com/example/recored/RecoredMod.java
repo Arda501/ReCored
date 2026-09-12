@@ -45,8 +45,9 @@ import org.slf4j.LoggerFactory;
  *       configure maps/lobby, join and control the round</li>
  *   <li>the {@code PlayerBlockBreakEvents.BEFORE} listener below - spawn/lobby
  *       protection and "last core broken = game over" logic</li>
- *   <li>{@code BeaconHardnessMixin}/{@code CoreMiningMixin}/{@code
- *       CoreProtectionMixin} - core mining behaviour</li>
+ *   <li>{@code CoreMiningMixin}/{@code CoreProtectionMixin} - core mining
+ *       behaviour; the server-only-compatible mining-slowdown trick lives in
+ *       {@link GameManager#startDigging} itself, not a mixin</li>
  *   <li>{@link SignCommands} + the sign-click {@code UseBlockCallback} below -
  *       {@code /recored sign set|remove}-configured "command signs"</li>
  *   <li>the {@code UseItemCallback}/{@code ServerLivingEntityEvents.

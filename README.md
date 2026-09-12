@@ -27,9 +27,7 @@ Play at IP: goodoldmc.com
 ./gradlew runServer    # dev server
 ./gradlew runClient    # dev client
 ```
-Currently works serverside only but the beacon
-hardness mixin is shared code, and clients need core positions (synced via a custom
-payload) for block-break prediction to match the server, so installing the mod clientside aswell is recommanded. 
+Currently works serverside but the beacon hardness mixin is shared code, and clients need core positions (synced via a custom payload) for block-break prediction to match the server, so installing the mod clientside aswell is recommanded. 
 
 ## Architecture
 

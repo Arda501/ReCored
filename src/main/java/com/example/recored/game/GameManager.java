@@ -44,6 +44,8 @@ import net.minecraft.world.item.component.CustomData;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.Objective;
 import net.minecraft.world.scores.PlayerScoreEntry;
@@ -88,6 +90,8 @@ public final class GameManager {
 	private static final double ENEMY_WARNING_RANGE = 10.0;
 	/** Highest core index shown per section (own/enemy) of a sidebar - plenty for any reasonable map. */
 	private static final int MAX_HUD_LINES = 8;
+	/** Score-holder name suffix for the elapsed-time line - see {@link #timerLine}. Deliberately not "_line_"-prefixed so the numeric clearing loop never touches it. */
+	private static final String TIMER_LINE_NAME = "_timer";
 
 	/** Hotbar slot the ready-up item lives in - see {@link #enforceReadyItems}. */
 	private static final int READY_ITEM_SLOT = 0;
@@ -105,6 +109,18 @@ public final class GameManager {
 
 	/** Id of the transient {@code Attributes.BLOCK_BREAK_SPEED} modifier applied while actively mining a core - see {@link #startDigging}. */
 	private static final Identifier MINING_SLOWDOWN_ID = Identifier.fromNamespaceAndPath(RecoredMod.MOD_ID, "core_mining_slowdown");
+
+	/** Generous reach used only to decide whether to *pre-arm* the mining slowdown - see {@link #tickMiningSlowdownPriming}. */
+	private static final double MINING_SLOWDOWN_PRIME_REACH = 8.0;
+
+	/**
+	 * A completed core doesn't need to reach a mathematically exact
+	 * {@code 1.0} - see {@link #applyMiningTick}. A small tolerance absorbs
+	 * whatever tiny gap is left between a vanilla client's own local
+	 * prediction and this server's real progress, without giving up any
+	 * meaningful amount of the intended mining duration.
+	 */
+	private static final float MINING_COMPLETE_THRESHOLD = 0.98F;
 
 	private GameManager() {
 	}
@@ -190,6 +206,14 @@ public final class GameManager {
 
 	/** Drives the HUD refresh throttle and the enemy-nearby blink phase. */
 	private int hudTick = 0;
+
+	/**
+	 * Ticks since the current round went {@link Phase#RUNNING} - drives the
+	 * sidebar's elapsed-time line (see {@link #timerLine}). Uncapped (counts
+	 * up indefinitely, no round time limit); reset in {@link #beginStart} and
+	 * {@link #cleanupRound}.
+	 */
+	private int roundElapsedTicks = 0;
 
 	/**
 	 * The mining duration a core should <em>behave</em> as if it had, expressed
@@ -348,6 +372,7 @@ public final class GameManager {
 		destroyedCores.clear();
 		readyPlayers.clear();
 		startCountdown = -1;
+		roundElapsedTicks = 0;
 		phase = Phase.RUNNING;
 
 		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
@@ -806,6 +831,7 @@ public final class GameManager {
 		digging.clear();
 		pendingRespawns.clear();
 		readyPlayers.clear();
+		roundElapsedTicks = 0;
 		if (server != null) {
 			syncCores(server);
 			refreshHud(server);
@@ -854,6 +880,8 @@ public final class GameManager {
 			tickCountdown(server);
 		}
 		if (phase == Phase.RUNNING) {
+			roundElapsedTicks++;
+			tickMiningSlowdownPriming(server);
 			tickCoreMining(server);
 		}
 		hudTick++;
@@ -941,6 +969,43 @@ public final class GameManager {
 	}
 
 	/**
+	 * Applying the slowdown reactively - only once a player actually starts
+	 * digging - leaves a real gap: the attribute change has to round-trip
+	 * back to the client (a synced vanilla attribute, but still a packet)
+	 * before that client's *own* local mining prediction starts using it.
+	 * Until it arrives, the client keeps predicting at the old, un-slowed
+	 * speed, racing ahead of the server by roughly one network round-trip's
+	 * worth of progress - which is exactly what made a core feel "stuck"
+	 * just under 100%, needing an extra manual re-click to actually finish.
+	 *
+	 * <p>So every tick, for every rostered player, this pre-arms the same
+	 * modifier the moment they're simply *looking at* an enemy core -
+	 * before they've clicked at all - so by the time they actually start
+	 * digging, the attribute has almost always already finished
+	 * round-tripping. Cheap (one raycast per rostered player per tick,
+	 * negligible at this mod's scale) and side-effect-free: it never
+	 * touches anyone not currently sighted on an enemy core, so ordinary
+	 * mining elsewhere is never slowed.
+	 */
+	private void tickMiningSlowdownPriming(MinecraftServer server) {
+		for (UUID uuid : players.keySet()) {
+			ServerPlayer player = server.getPlayerList().getPlayer(uuid);
+			if (player == null) {
+				continue;
+			}
+			Team team = teamOf(uuid);
+			HitResult hit = player.pick(MINING_SLOWDOWN_PRIME_REACH, 1.0F, false);
+			boolean sightedOnEnemyCore = hit.getType() == HitResult.Type.BLOCK
+				&& coreOwnerAt(((BlockHitResult) hit).getBlockPos()) == team.opposite();
+			if (sightedOnEnemyCore) {
+				startMiningSlowdown(player);
+			} else if (!digging.containsKey(uuid)) {
+				stopMiningSlowdown(player);
+			}
+		}
+	}
+
+	/**
 	 * Called from {@code CoreMiningMixin} on release/abort.
 	 *
 	 * <p>The client predicts completion independently (it runs the exact same
@@ -958,8 +1023,12 @@ public final class GameManager {
 	 */
 	public void stopDigging(ServerPlayer player, BlockPos pos) {
 		digging.remove(player.getUUID());
-		stopMiningSlowdown(player);
+		// Order matters: compute this last contribution BEFORE lifting the
+		// slowdown attribute, so it's calculated at the same effective speed
+		// every other tick was - removing it first would credit this tick at
+		// the un-slowed (3x too fast) rate instead.
 		applyMiningTick(player.level().getServer(), player, pos);
+		stopMiningSlowdown(player);
 	}
 
 	/** Drop bookkeeping for a player who disconnected mid-dig (progress is unaffected). */
@@ -1012,7 +1081,7 @@ public final class GameManager {
 		// prediction - see coreHardness's doc for why that's deliberate.
 		float perTick = state.getDestroyProgress(player, level, pos);
 		float total = Math.min(1.0F, coreProgress.getOrDefault(pos, 0.0F) + perTick);
-		if (total >= 1.0F) {
+		if (total >= MINING_COMPLETE_THRESHOLD) {
 			breakCore(server, server.overworld(), pos, player);
 		} else {
 			coreProgress.put(pos, total);
@@ -1134,8 +1203,9 @@ public final class GameManager {
 			hudObjectives.put(team, objective);
 
 			String currentLinePrefix = team.lowerName() + "_line_";
+			String timerName = team.lowerName() + TIMER_LINE_NAME;
 			for (PlayerScoreEntry entry : new ArrayList<>(scoreboard.listPlayerScores(objective))) {
-				if (!entry.owner().startsWith(currentLinePrefix)) {
+				if (!entry.owner().startsWith(currentLinePrefix) && !entry.owner().equals(timerName)) {
 					scoreboard.resetSinglePlayerScore(ScoreHolder.forNameOnly(entry.owner()), objective);
 				}
 			}
@@ -1181,6 +1251,7 @@ public final class GameManager {
 					continue;
 				}
 				scoreboard.setDisplayObjective(team.teamColor().displaySlot(), null);
+				scoreboard.resetSinglePlayerScore(ScoreHolder.forNameOnly(team.lowerName() + TIMER_LINE_NAME), objective);
 				for (int line = 0; line < MAX_HUD_LINES * 2; line++) {
 					scoreboard.resetSinglePlayerScore(ScoreHolder.forNameOnly(team.lowerName() + "_line_" + line), objective);
 				}
@@ -1248,6 +1319,14 @@ public final class GameManager {
 			List<CoreRow> enemyRows = rowsByTeam.get(enemyTeam);
 			int totalLines = ownRows.size() + enemyRows.size();
 
+			// Elapsed-time line always sits on top - a score comfortably above
+			// any core row's (which top out at totalLines) guarantees that
+			// regardless of how many rows are actually showing.
+			ScoreHolder timerHolder = ScoreHolder.forNameOnly(viewerTeam.lowerName() + TIMER_LINE_NAME);
+			ScoreAccess timerAccess = scoreboard.getOrCreatePlayerScore(timerHolder, objective, true);
+			timerAccess.set(totalLines + 1);
+			timerAccess.display(timerLine());
+
 			int line = 0;
 			for (int i = 0; i < ownRows.size(); i++, line++) {
 				CoreRow row = ownRows.get(i);
@@ -1278,6 +1357,17 @@ public final class GameManager {
 		ScoreAccess access = scoreboard.getOrCreatePlayerScore(holder, objective, true);
 		access.set(totalLines - line); // higher score = higher up the sidebar (vanilla sorts descending)
 		access.display(text);
+	}
+
+	/**
+	 * "Time: M:SS" since the round went RUNNING - uncapped, same for both
+	 * teams (identical wall-clock elapsed time), always the topmost line.
+	 */
+	private MutableComponent timerLine() {
+		int totalSeconds = roundElapsedTicks / 20;
+		int minutes = totalSeconds / 60;
+		int seconds = totalSeconds % 60;
+		return Component.literal(String.format("Time: %d:%02d", minutes, seconds)).withStyle(ChatFormatting.GRAY, ChatFormatting.BOLD);
 	}
 
 	/**

@@ -215,20 +215,36 @@ auto-resume mining on the same held-down click once it's finished (even
 speculatively), so the player had to release and click again every cycle.
 
 The actual fix doesn't touch the block's hardness at all - `Blocks.BEACON`'s
-real `3.0F` is left alone and used by both sides identically. Instead, the
-moment a player starts digging an (enemy) core, `GameManager.startDigging`
-applies a transient modifier to their **`Attributes.BLOCK_BREAK_SPEED`**
-attribute - a real, per-player vanilla mechanic, synced to the client
-automatically like any other attribute, no mod required to receive it - that
-slows their effective mining speed by exactly `3.0F / coreHardness` for as
-long as they keep digging (removed the moment they stop, in every path that
-can end it: release/abort, the core breaking, disconnecting, or the tick
-loop noticing the block or target changed). Since a vanilla client's own
-local mining prediction reads the *same* real block hardness and the *same*
-synced attribute value as the server's `applyMiningTick`, both sides now
-agree on the total mining time throughout - not just by coincidence at the
-very end - so the core mines start-to-finish in one continuous hold, exactly
-like mining any ordinary block.
+real `3.0F` is left alone and used by both sides identically. Instead,
+`GameManager.startDigging` applies a transient modifier to the miner's
+**`Attributes.BLOCK_BREAK_SPEED`** attribute - a real, per-player vanilla
+mechanic, synced to the client automatically like any other attribute, no
+mod required to receive it - that slows their effective mining speed by
+exactly `3.0F / coreHardness` for as long as they keep digging (removed the
+moment they stop, in every path that can end it: release/abort, the core
+breaking, disconnecting, or the tick loop noticing the block or target
+changed). Since a vanilla client's own local mining prediction reads the
+*same* real block hardness and the *same* synced attribute value as the
+server's `applyMiningTick`, both sides now agree on the total mining time
+throughout - not just by coincidence at the very end.
+
+Applying that modifier only reactively, the moment digging actually starts,
+still leaves a small gap though: the attribute change has to round-trip back
+to the client before *that* client's own local prediction starts using it,
+so for the first stretch of any dig the client is still predicting at the
+old, faster speed - racing a little ahead of the server, which is exactly
+what could still make a core feel "stuck" just under 100%, needing one more
+manual re-click to finish. `GameManager.tickMiningSlowdownPriming` closes
+this too: every tick, for every rostered player, it pre-arms the same
+modifier the moment they're simply *looking* at an enemy core - before
+they've clicked at all - so by the time they actually start digging, the
+attribute has almost always already finished round-tripping (cheap - one
+raycast per rostered player per tick - and side-effect-free, since it never
+touches anyone not currently sighted on an enemy core). `applyMiningTick`
+also doesn't require a mathematically exact `1.0` to finish (`MINING_COMPLETE
+_THRESHOLD` = `0.98F`), a small safety-net tolerance for whatever residual
+gap is left. Together, a core now mines start-to-finish in one continuous
+hold, exactly like mining any ordinary block.
 
 Beacons aren't in the pickaxe-mineable tag either way, so a tool never gives
 a mining-speed bonus on one - a diamond pickaxe mines a core exactly as fast
@@ -246,14 +262,18 @@ outright via `UseBlockCallback`, for anyone, in any phase.
 
 ### HUD
 
-A persistent per-team sidebar (`GameManager.setupHud`/`refreshHud`) shows
-**both** teams' cores and their health % - `<= 20%` red, `<= 50%` yellow,
-otherwise green - your own team's listed first (top), the enemy team's below
-(bottom), each marked with a small colour-coded `■` and labelled "RED Left
-Core"/"RED Right Core"/"BLUE Left Core"/"BLUE Right Core" as applicable (both
-the team and the side are always named, since each team's Left/Right cores
-are tracked independently of the other team's - see "Core mining" above).
-It's real vanilla scoreboard sidebar, not custom rendering: two objectives are
+A persistent per-team sidebar (`GameManager.setupHud`/`refreshHud`) shows,
+at the top, an uncapped **"Time: M:SS"** line - how long the current round
+has been running, identical on both sidebars, counting up with no limit
+(`GameManager.roundElapsedTicks`, incremented every tick while `RUNNING`,
+reset to `0` at the start of each round) - and below that, **both** teams'
+cores and their health % - `<= 20%` red, `<= 50%` yellow, otherwise green -
+your own team's listed first, the enemy team's below that, each marked with
+a small colour-coded `■` and labelled "RED Left Core"/"RED Right Core"/"BLUE
+Left Core"/"BLUE Right Core" as applicable (both the team and the side are
+always named, since each team's Left/Right cores are tracked independently
+of the other team's - see "Core mining" above). It's real vanilla scoreboard
+sidebar, not custom rendering: two objectives are
 registered, one displayed at `DisplaySlot.TEAM_RED`, one at `TEAM_BLUE` -
 vanilla only shows a team-colour sidebar slot to viewers whose own scoreboard
 team matches that colour, so red players automatically see the red-team

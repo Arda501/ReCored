@@ -16,6 +16,9 @@ saved "reset baseline" that gets reloaded after every round - plus a **lobby**
 (a fixed spawn + protected region, entirely separate from any map) where players
 land on join and whenever no round is live.
 
+Join discusson at https://matrix.to/#/#goodoldmc:tchncs.de
+Play at IP: goodoldmc.com
+
 ## Setup
 
 ```bash

@@ -19,9 +19,6 @@ import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.SoundCategory;
-import org.bukkit.attribute.Attribute;
-import org.bukkit.attribute.AttributeInstance;
-import org.bukkit.attribute.AttributeModifier;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
@@ -65,8 +62,6 @@ public final class GameManager {
 	private static final int WARNING_SOUND_TICKS = 20;
 	private static final double ENEMY_WARNING_RANGE = 10.0;
 	private static final int MAX_HUD_LINES = 8;
-
-	private static final String MINING_SLOWDOWN_ID = "recored_core_mining_slowdown";
 
 	private GameManager() {
 	}
@@ -559,40 +554,21 @@ public final class GameManager {
 
 	// --- persistent core mining --------------------------------------------
 
-	/** Called when a player starts damaging a core (a real one to mine - ownership is already checked by the caller). */
+	/**
+	 * Called when a player starts damaging a core (a real one to mine - ownership is already
+	 * checked by the caller). Unlike the original fabric mod, there's no need to also fake a
+	 * mining-speed attribute here: that trick existed purely to keep a vanilla client's own local
+	 * break prediction in sync with the server, and this port never lets that prediction run for a
+	 * core in the first place (the listener cancels the vanilla break attempt outright and drives
+	 * everything - including the crack overlay, via {@link Player#sendBlockDamage} - itself).
+	 */
 	public void startDigging(Player player, Location pos) {
 		digging.put(player.getUniqueId(), pos);
-		startMiningSlowdown(player);
-	}
-
-	private void startMiningSlowdown(Player player) {
-		AttributeInstance attribute = player.getAttribute(Attribute.BLOCK_BREAK_SPEED);
-		if (attribute == null) {
-			return;
-		}
-		attribute.removeModifier(java.util.UUID.nameUUIDFromBytes(MINING_SLOWDOWN_ID.getBytes()));
-		AttributeModifier modifier = new AttributeModifier(
-				org.bukkit.NamespacedKey.fromString("recored:core_mining_slowdown", plugin),
-				-0.9, AttributeModifier.Operation.ADD_SCALAR, org.bukkit.inventory.EquipmentSlotGroup.ANY);
-		attribute.addTransientModifier(modifier);
-	}
-
-	private void stopMiningSlowdown(Player player) {
-		if (player == null) {
-			return;
-		}
-		AttributeInstance attribute = player.getAttribute(Attribute.BLOCK_BREAK_SPEED);
-		if (attribute != null) {
-			attribute.getModifiers().stream()
-					.filter(m -> m.getKey().equals(org.bukkit.NamespacedKey.fromString("recored:core_mining_slowdown", plugin)))
-					.forEach(attribute::removeModifier);
-		}
 	}
 
 	/** Called on release/abort. */
 	public void stopDigging(Player player, Location pos) {
 		digging.remove(player.getUniqueId());
-		stopMiningSlowdown(player);
 	}
 
 	/** Drop bookkeeping for a player who disconnected mid-dig. */
@@ -613,7 +589,6 @@ public final class GameManager {
 			Player player = Bukkit.getPlayer(playerId);
 			if (player == null || coreOwnerAt(pos) == null) {
 				digging.remove(playerId);
-				stopMiningSlowdown(player);
 				continue;
 			}
 			applyMiningTick(player, pos);
@@ -667,17 +642,7 @@ public final class GameManager {
 
 	private void clearCoreProgress(Location pos) {
 		coreProgress.remove(pos);
-		Iterator<Map.Entry<UUID, Location>> it = digging.entrySet().iterator();
-		while (it.hasNext()) {
-			Map.Entry<UUID, Location> entry = it.next();
-			if (entry.getValue().equals(pos)) {
-				stopMiningSlowdown(Bukkit.getPlayer(entry.getKey()));
-				it.remove();
-			}
-		}
-		for (Player nearby : Bukkit.getOnlinePlayers()) {
-			nearby.sendBlockDamage(pos, -1F);
-		}
+		digging.values().removeIf(pos::equals);
 	}
 
 	private void playDestructionEffect(Location pos) {
@@ -721,13 +686,18 @@ public final class GameManager {
 		if (phase != Phase.RUNNING) {
 			for (Team team : Team.values()) {
 				scoreboard.clearSlot(team.sidebarSlot());
+				List<String> previous = lastHudEntries.remove(team);
+				if (previous != null) {
+					for (String entry : previous) {
+						scoreboard.resetScores(entry);
+					}
+				}
 			}
 			return;
 		}
 		for (Team team : Team.values()) {
 			Objective objective = hudObjectives.get(team);
 			if (objective != null) {
-				scoreboard.getObjective(objective.getName());
 				objective.setDisplaySlot(team.sidebarSlot());
 			}
 		}
@@ -771,51 +741,45 @@ public final class GameManager {
 			if (objective == null) {
 				continue;
 			}
-			for (String entry : new ArrayList<>(scoreboard.getEntries())) {
-				if (entry.startsWith(viewerTeam.lowerName() + ChatColor.RESET) || objective.getScore(entry).isScoreSet()) {
-					// cleared below per-team via resetLinesFor; skip global sweep to avoid clobbering the other team's lines
+
+			// Clear exactly what this team's objective showed last refresh - entries live on the
+			// whole (shared) Scoreboard, not scoped per-objective, so this must be precise rather
+			// than a blanket sweep, or it would also wipe the other team's current lines.
+			List<String> previous = lastHudEntries.get(viewerTeam);
+			if (previous != null) {
+				for (String entry : previous) {
+					scoreboard.resetScores(entry);
 				}
 			}
-			resetLinesFor(objective);
 
 			Team enemyTeam = viewerTeam.opposite();
 			List<CoreRow> ownRows = rowsByTeam.get(viewerTeam);
 			List<CoreRow> enemyRows = rowsByTeam.get(enemyTeam);
 			int totalLines = ownRows.size() + enemyRows.size();
 
-			objective.getScore(timerLine()).setScore(totalLines + 1);
+			List<String> current = new ArrayList<>();
+			String timer = timerLine();
+			objective.getScore(timer).setScore(totalLines + 1);
+			current.add(timer);
 
 			int line = totalLines;
 			for (CoreRow row : ownRows) {
-				objective.getScore(coreLine(viewerTeam, row.side(), row.pos(), row.destroyed(), enemyNear.getOrDefault(row.pos(), false), blinkOn, line)).setScore(line);
+				String entry = coreLine(viewerTeam, row.side(), row.pos(), row.destroyed(), enemyNear.getOrDefault(row.pos(), false), blinkOn, line);
+				objective.getScore(entry).setScore(line);
+				current.add(entry);
 				line--;
 			}
 			for (CoreRow row : enemyRows) {
-				objective.getScore(coreLine(enemyTeam, row.side(), row.pos(), row.destroyed(), false, false, line)).setScore(line);
+				String entry = coreLine(enemyTeam, row.side(), row.pos(), row.destroyed(), false, false, line);
+				objective.getScore(entry).setScore(line);
+				current.add(entry);
 				line--;
 			}
+			lastHudEntries.put(viewerTeam, current);
 		}
 	}
 
 	private final Map<Team, List<String>> lastHudEntries = new EnumMap<>(Team.class);
-
-	private void resetLinesFor(Objective objective) {
-		Team team = null;
-		for (Map.Entry<Team, Objective> e : hudObjectives.entrySet()) {
-			if (e.getValue() == objective) {
-				team = e.getKey();
-			}
-		}
-		if (team == null) {
-			return;
-		}
-		List<String> previous = lastHudEntries.get(team);
-		if (previous != null) {
-			for (String entry : previous) {
-				board().resetScores(entry);
-			}
-		}
-	}
 
 	/** "Time: M:SS" since the round went RUNNING - always the topmost line. */
 	private String timerLine() {

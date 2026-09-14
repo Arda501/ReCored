@@ -47,9 +47,14 @@ All admin commands require `recored.admin` (granted to ops by default).
    - `/recored map setregion <id> <red|blue>` (uses your last `/recored pos1`/`pos2`) - that
      team's protected spawn area
    - `/recored map setkit <id> <red|blue>` - captures your current inventory as that team's kit
-   - `/recored map save <id>` - captures every block in the bounding box as the reset baseline
-     (do this last, once the map actually looks how you want it to reset to)
+   - `/recored map save <id>` - captures every block (and any chest/barrel/furnace/etc.
+     contents) in the bounding box as the reset baseline (do this last, once the map actually
+     looks how you want it to reset to)
 3. `/recored map list` shows what's still missing before a map counts as READY.
+
+> Upgrading from an older version: `map save`'s file format changed to also cover container
+> contents. Run `/recored map save <id>` again for each of your maps - a `.snapshot` file saved
+> before this update won't load.
 
 Multiple maps can be registered; a ready round picks the next one round-robin.
 

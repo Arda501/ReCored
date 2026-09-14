@@ -1,0 +1,44 @@
+name: Release
+
+# Builds the plugin and attaches the jar to a GitHub Release whenever a version tag (v1.2.3) is
+# pushed. Push a tag to publish a release: git tag v1.0.1 && git push origin v1.0.1
+# Tag whichever commit you want released - this repo's active development lives on the
+# paper-26.2 branch, not master (which holds the original fabric mod), so tag a commit from there.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Build
+        run: mvn -B clean package
+
+      - name: Locate built jar
+        id: jar
+        run: |
+          jar_path=$(find target -maxdepth 1 -name '*.jar' ! -name '*sources*' ! -name '*javadoc*' | head -n1)
+          echo "path=$jar_path" >> "$GITHUB_OUTPUT"
+          echo "Built: $jar_path"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.jar.outputs.path }}
+          generate_release_notes: true

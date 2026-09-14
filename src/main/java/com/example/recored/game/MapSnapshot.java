@@ -108,13 +108,16 @@ public class MapSnapshot {
 	}
 
 	private void restoreContainer(Block block, int index) {
-		BlockState state = block.getState();
+		// Deliberately non-snapshot (live): see the class doc note on why plain getState() alone,
+		// even combined with the two-pass restore ordering, was still observed to silently discard
+		// the inventory write in testing.
+		BlockState state = block.getState(false);
 		if (!(state instanceof InventoryHolder holder)) {
 			return;
 		}
+		Map<Integer, ItemStack> slots = containers.get(index);
 		Inventory inventory = holder.getInventory();
 		inventory.clear();
-		Map<Integer, ItemStack> slots = containers.get(index);
 		if (slots != null) {
 			for (Map.Entry<Integer, ItemStack> entry : slots.entrySet()) {
 				inventory.setItem(entry.getKey(), entry.getValue());

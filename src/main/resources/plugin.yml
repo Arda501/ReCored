@@ -5,6 +5,7 @@ api-version: '26.2'
 author: InstanceLabs
 description: Team core-destruction minigame - mine the enemy team's cores while defending your own.
 website: https://github.com/Arda501/Recored
+softdepend: [PlaceholderAPI]
 commands:
   recored:
     description: Recored main command

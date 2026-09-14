@@ -124,6 +124,16 @@ public final class GameManager {
 		return players.get(player);
 	}
 
+	/** How many rostered players have readied up right now - only meaningful pre-round. */
+	public int readyCount() {
+		return readyPlayers.size();
+	}
+
+	/** Seconds left in the ready countdown, or -1 if it isn't running. */
+	public int countdownSecondsRemaining() {
+		return countdownTicksRemaining < 0 ? -1 : countdownTicksRemaining / 20;
+	}
+
 	/** While RUNNING, the active map's team spawn regions are protected; otherwise the lobby region is. */
 	public boolean isProtected(Location pos) {
 		if (phase != Phase.RUNNING) {

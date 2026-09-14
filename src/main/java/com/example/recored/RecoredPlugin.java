@@ -45,6 +45,11 @@ public class RecoredPlugin extends JavaPlugin {
 
 		Bukkit.getScheduler().runTaskTimer(this, GameManager.INSTANCE::tick, TICK_INTERVAL, TICK_INTERVAL);
 
+		if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
+			new RecoredPlaceholders(this).register();
+			getLogger().info("PlaceholderAPI found - %recored_...% placeholders registered.");
+		}
+
 		getLogger().info("Recored enabled.");
 	}
 

@@ -87,6 +87,29 @@ any core has fallen).
 `/recored sign set <command...>` (looking at a sign) attaches a command that runs as whoever
 right-clicks it - `/recored sign remove` detaches it.
 
+Displaying live stats (signs, scoreboards, ...)
+------------------------------------------------
+
+If [PlaceholderAPI](https://www.spigotmc.org/resources/placeholderapi.6245/) is installed,
+Recored registers its own placeholders on startup (nothing to configure) - any PAPI-aware
+plugin can then show live round stats anywhere it supports placeholders, including on a sign
+via [SignManager](https://modrinth.com/plugin/signmanager) (`/sign edit line 1 %recored_phase%`,
+refreshed automatically at whatever interval you've set with `/sign admin interval`), a
+scoreboard plugin, or chat formatting:
+
+| Placeholder | Value |
+|---|---|
+| `%recored_phase%` | `WAITING` / `STARTING` / `RUNNING` / `ENDED` |
+| `%recored_active_map%` | the map id currently being played, or `-` |
+| `%recored_red_players%` / `%recored_blue_players%` | players on each team right now |
+| `%recored_ready%` | ready count, e.g. `3/4` (`-` once RUNNING) |
+| `%recored_countdown%` | seconds left in the ready countdown, or `-` |
+| `%recored_red_cores%` / `%recored_blue_cores%` | cores still standing (`-` outside RUNNING) |
+| `%recored_respawn_delay%` / `%recored_coretime%` | current settings, in seconds |
+
+No PlaceholderAPI installed? Recored just skips registering them - everything else works the
+same either way.
+
 Links
 -----
 

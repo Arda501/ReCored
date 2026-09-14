@@ -179,7 +179,14 @@ public class RecoredListener implements Listener {
 			return; // not player-inflicted damage - not ours to gate
 		}
 		GameManager gm = gm();
-		if (gm.phase != Phase.RUNNING || gm.teamOf(victim.getUniqueId()) == null || gm.teamOf(attacker.getUniqueId()) == null) {
+		Team victimTeam = gm.teamOf(victim.getUniqueId());
+		Team attackerTeam = gm.teamOf(attacker.getUniqueId());
+		if (victimTeam == null && attackerTeam == null) {
+			// neither player has anything to do with Recored (e.g. they're playing some other
+			// minigame entirely) - not ours to touch, at all, regardless of Recored's own phase
+			return;
+		}
+		if (gm.phase != Phase.RUNNING || victimTeam == null || attackerTeam == null) {
 			event.setCancelled(true);
 		}
 	}
@@ -199,7 +206,10 @@ public class RecoredListener implements Listener {
 		Player p = event.getPlayer();
 		GameManager gm = gm();
 		Team team = gm.teamOf(p.getUniqueId());
-		if (gm.phase == Phase.RUNNING && team != null) {
+		if (team == null) {
+			return; // not a Recored participant - their respawn location is none of Recored's business
+		}
+		if (gm.phase == Phase.RUNNING) {
 			Location spawn = gm.spawns.get(team);
 			if (spawn != null) {
 				event.setRespawnLocation(spawn);
@@ -220,10 +230,18 @@ public class RecoredListener implements Listener {
 
 	@EventHandler
 	public void onJoin(PlayerJoinEvent event) {
+		// Only a player who was already a rostered Recored participant before this connection
+		// (i.e. reconnecting mid-round - WAITING/STARTING already drops their roster entry on
+		// disconnect, see GameManager#handleDisconnect) gets auto-repositioned. Everyone else -
+		// including a brand new join, or anyone playing something else entirely, like BowBash -
+		// is left wherever the server naturally puts them.
 		Player p = event.getPlayer();
 		GameManager gm = gm();
 		Team team = gm.teamOf(p.getUniqueId());
-		if (gm.phase == Phase.RUNNING && team != null) {
+		if (team == null) {
+			return;
+		}
+		if (gm.phase == Phase.RUNNING) {
 			gm.teleportToSpawn(p, team);
 		} else {
 			gm.sendToLobby(p);

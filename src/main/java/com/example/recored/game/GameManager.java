@@ -818,9 +818,21 @@ public final class GameManager {
 		}
 		int healthPercent = Math.max(0, Math.round((1.0F - coreProgress.getOrDefault(pos, 0.0F)) * 100.0F));
 		ChatColor healthColour = healthPercent <= 20 ? ChatColor.RED : healthPercent <= 50 ? ChatColor.YELLOW : ChatColor.GREEN;
-		ChatColor colour = enemyNearby && blinkOn ? ChatColor.WHITE : healthColour;
-		String bold = enemyNearby ? "" + ChatColor.BOLD : "";
-		return owner.colour() + "■ " + bold + colour + label + ": " + healthPercent + "%";
+
+		// Alert state: an enemy is within range right now (independent of blinkOn - that only
+		// drives the flicker). While alerted, the marker becomes a warning sign and the whole line
+		// alternates bold-white/plain-health-colour every half-cycle, instead of just a subtle
+		// colour swap - a clearer signal than colour alone, and one a sound cue alone doesn't give
+		// someone who's got the game muted.
+		if (enemyNearby) {
+			String marker = ChatColor.YELLOW + "⚠ ";
+			// NOTE: a colour code resets any formatting (bold/italic/etc.) that came before it in
+			// legacy chat formatting - colour must be written, then bold, never the other way round,
+			// or the bold silently never renders.
+			String textColour = (blinkOn ? ChatColor.WHITE : healthColour) + "" + ChatColor.BOLD;
+			return marker + textColour + label + ": " + healthPercent + "%";
+		}
+		return owner.colour() + "■ " + healthColour + label + ": " + healthPercent + "%";
 	}
 
 	/**

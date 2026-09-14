@@ -69,8 +69,10 @@ and the countdown the whole time you're waiting - not just once a round is actua
 
 Mining an enemy core takes a few seconds of continuous digging (`/recored coretime <seconds>`
 to change how long, default 10s) and can be shared/resumed by any teammate; your own core
-can't be mined at all, not even in creative. Losing all your cores ends the round for your
-team. Admins: `/recored start` force-starts (bypassing ready-up, if a map is ready),
+can't be mined at all, not even in creative. An enemy standing near one of *your* cores plays
+a warning note for anyone nearby and flips that core's sidebar line into an alert: a ⚠ marker
+and bold text alternating white/health-colour, so it's noticeable even with sound off. Losing
+all your cores ends the round for your team. Admins: `/recored start` force-starts (bypassing ready-up, if a map is ready),
 `/recored reset` aborts back to WAITING, `/recored respawndelay <seconds>` adjusts the pause
 before a dead player's forced respawn (default 1s, automatically bumped to at least 3s once
 any core has fallen).

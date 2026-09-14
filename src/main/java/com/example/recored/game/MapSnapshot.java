@@ -87,9 +87,20 @@ public class MapSnapshot {
 		for (int x = region.minX(); x <= region.maxX(); x++) {
 			for (int y = region.minY(); y <= region.maxY(); y++) {
 				for (int z = region.minZ(); z <= region.maxZ(); z++) {
-					Block block = region.world().getBlockAt(x, y, z);
-					block.setBlockData(blocks.get(index), false);
-					restoreContainer(block, index);
+					region.world().getBlockAt(x, y, z).setBlockData(blocks.get(index), false);
+					index++;
+				}
+			}
+		}
+		// Container contents are restored only after every block in the region has its final
+		// BlockData - setting a container's inventory in the same pass as setBlockData (even on
+		// the very same block, right after) can silently be discarded, seemingly by whatever
+		// re-settles the tile entity as placement finishes.
+		index = 0;
+		for (int x = region.minX(); x <= region.maxX(); x++) {
+			for (int y = region.minY(); y <= region.maxY(); y++) {
+				for (int z = region.minZ(); z <= region.maxZ(); z++) {
+					restoreContainer(region.world().getBlockAt(x, y, z), index);
 					index++;
 				}
 			}

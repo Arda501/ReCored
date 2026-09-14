@@ -9,6 +9,7 @@ import com.example.recored.game.Team;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
 import org.bukkit.block.Sign;
@@ -121,14 +122,14 @@ public class RecoredListener implements Listener {
 			return;
 		}
 
-		if (gm.isProtected(pos)) {
+		if (event.getPlayer().getGameMode() != GameMode.CREATIVE && gm.isProtected(pos)) {
 			event.setCancelled(true);
 		}
 	}
 
 	@EventHandler
 	public void onPlace(BlockPlaceEvent event) {
-		if (gm().isProtected(event.getBlock().getLocation())) {
+		if (event.getPlayer().getGameMode() != GameMode.CREATIVE && gm().isProtected(event.getBlock().getLocation())) {
 			event.setCancelled(true);
 		}
 	}

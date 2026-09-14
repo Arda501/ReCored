@@ -43,7 +43,9 @@ Setting up
 All admin commands require `recored.admin` (granted to ops by default).
 
 1. **Lobby**: look at one corner of the lobby area, `/recored pos1`; the opposite corner,
-   `/recored pos2`; stand where players should land, `/recored setlobby`.
+   `/recored pos2`; stand where players should land, `/recored setlobby`. Building/breaking
+   inside it is blocked while any round isn't RUNNING (and inside team spawn regions while
+   one is) - switch to creative mode to bypass that and edit it anyway.
 2. **A map**: `/recored map create <id>`, then for that id:
    - `/recored map corner1`/`corner2` (look at a block) - the map's bounding box
    - `/recored map setspawn <id> <red|blue>` (stand there) - each team's spawn

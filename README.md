@@ -32,6 +32,11 @@ mvn clean package
 
 Produces `target/Recored-<version>.jar`. Drop it into your server's `plugins/` folder.
 
+Pushing a version tag (`git tag v1.0.1 && git push origin v1.0.1`) instead builds it on GitHub
+and attaches the jar to a new [Release](https://github.com/Arda501/ReCored/releases) - no local
+build needed. Tag a commit on the `paper-26.2` branch (this port), not `master` (the original
+fabric mod).
+
 Setting up
 ----------
 

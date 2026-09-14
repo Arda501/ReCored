@@ -68,8 +68,10 @@ before that; `/recored status` any time. Your sidebar shows team sizes, how many
 and the countdown the whole time you're waiting - not just once a round is actually running.
 
 Mining an enemy core takes a few seconds of continuous digging (`/recored coretime <seconds>`
-to change how long, default 10s) and can be shared/resumed by any teammate; your own core
-can't be mined at all, not even in creative. An enemy standing near one of *your* cores plays
+to change how long, default 10s) and can be shared/resumed by any teammate (so it's never
+lost if you let go, or a teammate takes over) but stops within a tick or two of you actually
+stopping - looking away or moving out of reach. Your own core can't be mined at all, not even
+in creative. An enemy standing near one of *your* cores plays
 a warning note for anyone nearby and flips that core's sidebar line into an alert: a ⚠ marker
 and bold text alternating white/health-colour, so it's noticeable even with sound off. Losing
 all your cores ends the round for your team. Admins: `/recored start` force-starts (bypassing ready-up, if a map is ready),

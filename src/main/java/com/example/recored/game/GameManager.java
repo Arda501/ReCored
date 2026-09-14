@@ -15,6 +15,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.block.Block;
 import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
@@ -576,6 +577,9 @@ public final class GameManager {
 		digging.remove(playerId);
 	}
 
+	/** Generous reach for {@link #stillTargeting} - real survival reach is shorter; this only needs to not false-negative on latency/tiny movement. */
+	private static final double DIGGING_LIVENESS_REACH = 6.0;
+
 	private void tickCoreMining() {
 		if (digging.isEmpty()) {
 			return;
@@ -587,12 +591,31 @@ public final class GameManager {
 				continue;
 			}
 			Player player = Bukkit.getPlayer(playerId);
-			if (player == null || coreOwnerAt(pos) == null) {
+			if (player == null || coreOwnerAt(pos) == null || !stillTargeting(player, pos)) {
 				digging.remove(playerId);
 				continue;
 			}
 			applyMiningTick(player, pos);
 		}
+	}
+
+	/**
+	 * Independent, per-tick confirmation that {@code player} is still actually digging {@code pos} -
+	 * the authoritative "did they stop" signal, not {@link #stopDigging}/{@code
+	 * BlockDamageAbortEvent} alone. That event is meant to fire the instant a player releases, but
+	 * doesn't reliably arrive once the originating {@code BlockDamageEvent} has been cancelled -
+	 * which it always is here, for every core (see {@code RecoredListener#onDamage}) - so relying on
+	 * it by itself left a core's progress silently draining on its own, with nobody digging, until it
+	 * broke completely unattended. This backstop means that even if the release event never shows
+	 * up, progress stops within a tick or two of the player no longer looking at the core anyway.
+	 */
+	private boolean stillTargeting(Player player, Location pos) {
+		if (!player.getWorld().equals(pos.getWorld())) {
+			return false;
+		}
+		org.bukkit.util.RayTraceResult hit = player.rayTraceBlocks(DIGGING_LIVENESS_REACH);
+		Block target = hit != null ? hit.getHitBlock() : null;
+		return target != null && target.getLocation().equals(pos);
 	}
 
 	/** One tick's worth of mining progress on {@code pos} from {@code player}, finishing the core if it crosses 100%. */

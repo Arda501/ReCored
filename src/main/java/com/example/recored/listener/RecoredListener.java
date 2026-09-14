@@ -22,6 +22,7 @@ import org.bukkit.event.block.BlockDamageEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -225,6 +226,30 @@ public class RecoredListener implements Listener {
 	public void onDropItem(PlayerDropItemEvent event) {
 		if (ReadyItem.isReadyItem(plugin, event.getItemDrop().getItemStack())) {
 			event.setCancelled(true);
+		}
+	}
+
+	/** Command names allowed for a rostered player while a round is RUNNING, besides admins (who are never restricted). */
+	private static final java.util.Set<String> ALLOWED_COMMANDS_IN_ROUND = java.util.Set.of("help", "matrix");
+
+	@EventHandler
+	public void onCommand(PlayerCommandPreprocessEvent event) {
+		Player p = event.getPlayer();
+		if (p.hasPermission("recored.admin")) {
+			return;
+		}
+		GameManager gm = gm();
+		if (gm.phase != Phase.RUNNING || gm.teamOf(p.getUniqueId()) == null) {
+			return;
+		}
+		String label = event.getMessage().substring(1).split(" ", 2)[0].toLowerCase();
+		int colon = label.indexOf(':'); // strip a "plugin:command" prefix, e.g. "recored:help"
+		if (colon >= 0) {
+			label = label.substring(colon + 1);
+		}
+		if (!ALLOWED_COMMANDS_IN_ROUND.contains(label)) {
+			event.setCancelled(true);
+			p.sendMessage(ChatColor.RED + "Commands are disabled during a round.");
 		}
 	}
 

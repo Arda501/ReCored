@@ -19,6 +19,7 @@ import org.jetbrains.annotations.Nullable;
  *
  * <pre>
  * %recored_phase%            WAITING / STARTING / RUNNING / ENDED
+ * %recored_time%              "M:SS" elapsed since the round went RUNNING, or "-" otherwise
  * %recored_active_map%       the map id currently being played, or "-" outside a round
  * %recored_red_players%      players on the red team right now
  * %recored_blue_players%     players on the blue team right now
@@ -64,6 +65,7 @@ public class RecoredPlaceholders extends PlaceholderExpansion {
 		GameManager gm = GameManager.INSTANCE;
 		return switch (params.toLowerCase()) {
 			case "phase" -> gm.phase.name();
+			case "time" -> gm.phase == Phase.RUNNING ? gm.elapsedTimeFormatted() : "-";
 			case "active_map" -> {
 				var active = MapRegistry.INSTANCE.activeMap();
 				yield active != null ? active.id : "-";

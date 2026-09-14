@@ -76,7 +76,12 @@ Mining an enemy core takes a few seconds of continuous digging (`/recored coreti
 to change how long, default 10s) and can be shared/resumed by any teammate (so it's never
 lost if you let go, or a teammate takes over) but stops within a tick or two of you actually
 stopping - looking away or moving out of reach. Your own core can't be mined at all, not even
-in creative. An enemy standing near one of *your* cores plays
+in creative. Your effective mining speed is also slowed to match `coretime`, so your own
+client's local mining prediction - which the server otherwise has no control over - takes
+exactly as long as the real thing; without this a core would visibly (and misleadingly) seem
+to "break and reappear" every few seconds as your client's much-faster local guess kept
+getting corrected, even though server-side progress was accumulating normally underneath the
+whole time. An enemy standing near one of *your* cores plays
 a warning note for anyone nearby and flips that core's sidebar line into an alert: a ⚠ marker
 and bold text alternating white/health-colour, so it's noticeable even with sound off. Losing
 all your cores ends the round for your team. Admins: `/recored start` force-starts (bypassing ready-up, if a map is ready),
@@ -86,6 +91,9 @@ any core has fallen).
 
 `/recored sign set <command...>` (looking at a sign) attaches a command that runs as whoever
 right-clicks it - `/recored sign remove` detaches it.
+
+While a round is RUNNING, a rostered non-admin player can't use any command except `/help` and
+`/matrix` - everything else is silently blocked. Admins (`recored.admin`) are never restricted.
 
 Displaying live stats (signs, scoreboards, ...)
 ------------------------------------------------

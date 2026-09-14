@@ -15,6 +15,10 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.NamespacedKey;
+import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
+import org.bukkit.attribute.AttributeModifier;
 import org.bukkit.block.Block;
 import org.bukkit.Material;
 import org.bukkit.Particle;
@@ -127,6 +131,12 @@ public final class GameManager {
 	/** How many rostered players have readied up right now - only meaningful pre-round. */
 	public int readyCount() {
 		return readyPlayers.size();
+	}
+
+	/** "M:SS" elapsed since the round went RUNNING. */
+	public String elapsedTimeFormatted() {
+		int totalSeconds = roundElapsedTicks / 20;
+		return String.format("%d:%02d", totalSeconds / 60, totalSeconds % 60);
 	}
 
 	/** Seconds left in the ready countdown, or -1 if it isn't running. */
@@ -565,26 +575,70 @@ public final class GameManager {
 
 	// --- persistent core mining --------------------------------------------
 
+	/** A beacon's real, unmodified vanilla hardness - what a client predicts its own local mining time from. */
+	private static final float VANILLA_BEACON_HARDNESS = 3.0F;
+
 	/**
 	 * Called when a player starts damaging a core (a real one to mine - ownership is already
-	 * checked by the caller). Unlike the original fabric mod, there's no need to also fake a
-	 * mining-speed attribute here: that trick existed purely to keep a vanilla client's own local
-	 * break prediction in sync with the server, and this port never lets that prediction run for a
-	 * core in the first place (the listener cancels the vanilla break attempt outright and drives
-	 * everything - including the crack overlay, via {@link Player#sendBlockDamage} - itself).
+	 * checked by the caller). Cancelling the vanilla break attempt (see {@code
+	 * RecoredListener#onDamage}) stops the server from ever actually finishing a core on its own,
+	 * but it does nothing about the client's own *local* mining prediction, which still runs off
+	 * the core's real, unmodified vanilla hardness (~3s for a beacon) - so without this, the client
+	 * finishes its own countdown, shows the block breaking, and (since the server hasn't actually
+	 * removed it) immediately corrects itself and puts it back - a visible flicker, repeating every
+	 * ~3s, while server-side mining continues underneath completely undisturbed by any of it. This
+	 * slows the player's own effective mining speed so their local prediction takes exactly as long
+	 * as the real, server-side {@link #coreMiningSeconds}, eliminating the flicker entirely.
 	 */
 	public void startDigging(Player player, Location pos) {
 		digging.put(player.getUniqueId(), pos);
+		startMiningSlowdown(player);
 	}
 
 	/** Called on release/abort. */
 	public void stopDigging(Player player, Location pos) {
 		digging.remove(player.getUniqueId());
+		stopMiningSlowdown(player);
 	}
 
 	/** Drop bookkeeping for a player who disconnected mid-dig. */
 	public void clearDigging(UUID playerId) {
 		digging.remove(playerId);
+		stopMiningSlowdown(Bukkit.getPlayer(playerId));
+	}
+
+	private NamespacedKey miningSlowdownKey() {
+		return new NamespacedKey(plugin, "core_mining_slowdown");
+	}
+
+	/**
+	 * Scales the player's {@link Attribute#BLOCK_BREAK_SPEED} down so their own local mining
+	 * prediction - which the server has no control over otherwise - takes exactly {@link
+	 * #coreMiningSeconds} instead of a beacon's real ~3s. Recalculated (not cached) every call so a
+	 * live {@code /recored coretime} change takes effect on the very next dig, not just future ones.
+	 */
+	private void startMiningSlowdown(Player player) {
+		AttributeInstance attribute = player.getAttribute(Attribute.BLOCK_BREAK_SPEED);
+		if (attribute == null) {
+			return;
+		}
+		stopMiningSlowdown(player);
+		double desiredHardness = (coreMiningSeconds * 20.0) / 30.0; // inverse of vanilla's ticks = hardness * 30
+		double multiplier = VANILLA_BEACON_HARDNESS / desiredHardness;
+		attribute.addTransientModifier(new AttributeModifier(miningSlowdownKey(), multiplier - 1.0, AttributeModifier.Operation.MULTIPLY_SCALAR_1));
+	}
+
+	private void stopMiningSlowdown(Player player) {
+		if (player == null) {
+			return;
+		}
+		AttributeInstance attribute = player.getAttribute(Attribute.BLOCK_BREAK_SPEED);
+		if (attribute == null) {
+			return;
+		}
+		attribute.getModifiers().stream()
+				.filter(modifier -> modifier.getKey().equals(miningSlowdownKey()))
+				.forEach(attribute::removeModifier);
 	}
 
 	/** Generous reach for {@link #stillTargeting} - real survival reach is shorter; this only needs to not false-negative on latency/tiny movement. */
@@ -603,6 +657,7 @@ public final class GameManager {
 			Player player = Bukkit.getPlayer(playerId);
 			if (player == null || coreOwnerAt(pos) == null || !stillTargeting(player, pos)) {
 				digging.remove(playerId);
+				stopMiningSlowdown(player);
 				continue;
 			}
 			applyMiningTick(player, pos);
@@ -675,7 +730,14 @@ public final class GameManager {
 
 	private void clearCoreProgress(Location pos) {
 		coreProgress.remove(pos);
-		digging.values().removeIf(pos::equals);
+		Iterator<Map.Entry<UUID, Location>> it = digging.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<UUID, Location> entry = it.next();
+			if (pos.equals(entry.getValue())) {
+				stopMiningSlowdown(Bukkit.getPlayer(entry.getKey()));
+				it.remove();
+			}
+		}
 	}
 
 	private void playDestructionEffect(Location pos) {

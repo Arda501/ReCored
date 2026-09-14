@@ -19,8 +19,9 @@ fully intact.
 
 Entirely independent of the [BowBash](https://github.com/Arda501/BowBash) plugin: different
 command (`/recored` vs `/bb`), different permission root (`recored.*` vs `bowbash.*`),
-different package, different data folder. Both can be installed on the same server with no
-conflict - verified by loading both together.
+different package, different data folder, and every listener that touches a player who
+isn't a Recored participant (PVP-gating, join/respawn redirection) bails out immediately
+rather than acting server-wide - both can be installed on the same server with no conflict.
 
 Building
 --------
@@ -58,7 +59,8 @@ Playing
 `/recored join <red|blue>` hands you a "Not Ready" item - right-click it to ready up. Once
 both teams are equal size (at least one player each) and everyone's ready, a countdown starts
 automatically and the round begins on whichever map is next in rotation. `/recored leave`
-before that; `/recored status` any time.
+before that; `/recored status` any time. Your sidebar shows team sizes, how many are ready,
+and the countdown the whole time you're waiting - not just once a round is actually running.
 
 Mining an enemy core takes a few seconds of continuous digging (`/recored coretime <seconds>`
 to change how long, default 10s) and can be shared/resumed by any teammate; your own core

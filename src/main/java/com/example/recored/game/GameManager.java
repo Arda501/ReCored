@@ -682,24 +682,15 @@ public final class GameManager {
 	 * enemy-nearby blink + proximity warning stay restricted to a team's own cores.
 	 */
 	private void refreshHud() {
-		Scoreboard scoreboard = board();
-		if (phase != Phase.RUNNING) {
-			for (Team team : Team.values()) {
-				scoreboard.clearSlot(team.sidebarSlot());
-				List<String> previous = lastHudEntries.remove(team);
-				if (previous != null) {
-					for (String entry : previous) {
-						scoreboard.resetScores(entry);
-					}
-				}
-			}
-			return;
-		}
 		for (Team team : Team.values()) {
 			Objective objective = hudObjectives.get(team);
 			if (objective != null) {
 				objective.setDisplaySlot(team.sidebarSlot());
 			}
+		}
+		if (phase != Phase.RUNNING) {
+			refreshLobbyHud();
+			return;
 		}
 
 		boolean blinkOn = (hudTick / (HUD_REFRESH_TICKS * BLINK_HALF_PERIOD)) % 2 == 0;
@@ -737,77 +728,115 @@ public final class GameManager {
 		}
 
 		for (Team viewerTeam : Team.values()) {
-			Objective objective = hudObjectives.get(viewerTeam);
-			if (objective == null) {
-				continue;
-			}
-
-			// Clear exactly what this team's objective showed last refresh - entries live on the
-			// whole (shared) Scoreboard, not scoped per-objective, so this must be precise rather
-			// than a blanket sweep, or it would also wipe the other team's current lines.
-			List<String> previous = lastHudEntries.get(viewerTeam);
-			if (previous != null) {
-				for (String entry : previous) {
-					scoreboard.resetScores(entry);
-				}
-			}
-
 			Team enemyTeam = viewerTeam.opposite();
 			List<CoreRow> ownRows = rowsByTeam.get(viewerTeam);
 			List<CoreRow> enemyRows = rowsByTeam.get(enemyTeam);
-			int totalLines = ownRows.size() + enemyRows.size();
 
-			List<String> current = new ArrayList<>();
-			String timer = timerLine();
-			objective.getScore(timer).setScore(totalLines + 1);
-			current.add(timer);
-
-			int line = totalLines;
+			List<String> lines = new ArrayList<>();
+			lines.add(timerLine(viewerTeam));
 			for (CoreRow row : ownRows) {
-				String entry = coreLine(viewerTeam, row.side(), row.pos(), row.destroyed(), enemyNear.getOrDefault(row.pos(), false), blinkOn, line);
-				objective.getScore(entry).setScore(line);
-				current.add(entry);
-				line--;
+				lines.add(coreLine(viewerTeam, viewerTeam, row.side(), row.pos(), row.destroyed(), enemyNear.getOrDefault(row.pos(), false), blinkOn));
 			}
 			for (CoreRow row : enemyRows) {
-				String entry = coreLine(enemyTeam, row.side(), row.pos(), row.destroyed(), false, false, line);
-				objective.getScore(entry).setScore(line);
-				current.add(entry);
-				line--;
+				lines.add(coreLine(viewerTeam, enemyTeam, row.side(), row.pos(), row.destroyed(), false, false));
 			}
-			lastHudEntries.put(viewerTeam, current);
+			setLines(viewerTeam, lines);
+		}
+	}
+
+	/** The lobby/ready-up sidebar shown while a round isn't RUNNING - team sizes, ready count, countdown. */
+	private void refreshLobbyHud() {
+		int red = countTeam(Team.RED);
+		int blue = countTeam(Team.BLUE);
+		int readyCount = readyPlayers.size();
+		int totalCount = players.size();
+		for (Team team : Team.values()) {
+			List<String> lines = new ArrayList<>();
+			lines.add(ChatColor.RED + "Red: " + ChatColor.WHITE + red);
+			lines.add(ChatColor.BLUE + "Blue: " + ChatColor.WHITE + blue);
+			lines.add(ChatColor.GRAY + "Ready: " + ChatColor.WHITE + readyCount + "/" + totalCount);
+			if (phase == Phase.STARTING) {
+				lines.add(ChatColor.YELLOW + "Starting: " + ChatColor.WHITE + Math.max(0, countdownTicksRemaining / 20) + "s");
+			} else {
+				lines.add(ChatColor.GRAY + "Waiting for ready players");
+			}
+			setLines(team, lines);
 		}
 	}
 
 	private final Map<Team, List<String>> lastHudEntries = new EnumMap<>(Team.class);
 
+	/**
+	 * Replaces exactly what {@code viewer}'s objective showed last refresh with {@code lines}
+	 * (topmost first), scoring them top-to-bottom. Entries live on the whole (shared) Scoreboard,
+	 * not scoped per-objective, so clearing is precise (exactly the previous entries) rather than a
+	 * blanket sweep - that would also wipe the other team's current lines.
+	 */
+	private void setLines(Team viewer, List<String> lines) {
+		Objective objective = hudObjectives.get(viewer);
+		if (objective == null) {
+			return;
+		}
+		Scoreboard scoreboard = board();
+		List<String> previous = lastHudEntries.get(viewer);
+		if (previous != null) {
+			for (String entry : previous) {
+				scoreboard.resetScores(entry);
+			}
+		}
+		List<String> current = new ArrayList<>();
+		int score = lines.size();
+		for (String line : lines) {
+			String entry = clamp(line, 32) + uniqueSuffix(viewer, score);
+			objective.getScore(entry).setScore(score);
+			current.add(entry);
+			score--;
+		}
+		lastHudEntries.put(viewer, current);
+	}
+
 	/** "Time: M:SS" since the round went RUNNING - always the topmost line. */
-	private String timerLine() {
+	private String timerLine(Team viewer) {
 		int totalSeconds = roundElapsedTicks / 20;
 		int minutes = totalSeconds / 60;
 		int seconds = totalSeconds % 60;
-		return ChatColor.GRAY + "" + ChatColor.BOLD + String.format("Time: %d:%02d", minutes, seconds) + uniqueSuffix(0);
+		return ChatColor.GRAY + "" + ChatColor.BOLD + String.format("Time: %d:%02d", minutes, seconds);
 	}
 
-	/** One sidebar line: "RED Left Core: 87%", or "RED Left Core: DESTROYED" once it's gone. */
-	private String coreLine(Team owner, Side side, Location pos, boolean destroyed, boolean enemyNearby, boolean blinkOn, int uniqueSalt) {
+	/**
+	 * One sidebar line: "RED Left Core: 87%", or "RED Left Core: DESTROYED" once it's gone.
+	 *
+	 * @param viewer whose sidebar this line is being built for - distinct from {@code owner} (the
+	 *               core's own team) so the same core's line, shown on both teams' boards at once
+	 *               (one as "own", one as "enemy"), never collides as a scoreboard entry even when
+	 *               the visible text would otherwise be identical (see {@link #uniqueSuffix})
+	 */
+	private String coreLine(Team viewer, Team owner, Side side, Location pos, boolean destroyed, boolean enemyNearby, boolean blinkOn) {
 		String label = owner.name() + " " + side.label() + " Core";
-		String text;
 		if (destroyed) {
-			text = owner.colour() + "■ " + ChatColor.RED + "" + ChatColor.STRIKETHROUGH + label + ": DESTROYED";
-		} else {
-			int healthPercent = Math.max(0, Math.round((1.0F - coreProgress.getOrDefault(pos, 0.0F)) * 100.0F));
-			ChatColor healthColour = healthPercent <= 20 ? ChatColor.RED : healthPercent <= 50 ? ChatColor.YELLOW : ChatColor.GREEN;
-			ChatColor colour = enemyNearby && blinkOn ? ChatColor.WHITE : healthColour;
-			String bold = enemyNearby ? "" + ChatColor.BOLD : "";
-			text = owner.colour() + "■ " + bold + colour + label + ": " + healthPercent + "%";
+			return owner.colour() + "■ " + ChatColor.RED + "" + ChatColor.STRIKETHROUGH + label + ": DESTROYED";
 		}
-		return clamp(text, 34) + uniqueSuffix(uniqueSalt);
+		int healthPercent = Math.max(0, Math.round((1.0F - coreProgress.getOrDefault(pos, 0.0F)) * 100.0F));
+		ChatColor healthColour = healthPercent <= 20 ? ChatColor.RED : healthPercent <= 50 ? ChatColor.YELLOW : ChatColor.GREEN;
+		ChatColor colour = enemyNearby && blinkOn ? ChatColor.WHITE : healthColour;
+		String bold = enemyNearby ? "" + ChatColor.BOLD : "";
+		return owner.colour() + "■ " + bold + colour + label + ": " + healthPercent + "%";
 	}
 
-	private String uniqueSuffix(int salt) {
+	/**
+	 * A per-viewer, per-row-position suffix guaranteeing two lines are never the same scoreboard
+	 * entry even when their visible text is identical - which happens routinely here: the same
+	 * core's line can appear, with the exact same text, on both teams' sidebars at once (RED's
+	 * "enemy" row for a BLUE core with no threat nearby renders identically to BLUE's "own" row for
+	 * that same core), and the lobby sidebar shows literally the same team-count text to everyone.
+	 * Entries are shared across the whole Scoreboard (not scoped per-objective - see {@link
+	 * #setLines}), so two teams' boards colliding on one would make refreshing one silently wipe
+	 * the other's currently-displayed line too.
+	 */
+	private String uniqueSuffix(Team viewer, int salt) {
 		ChatColor[] colours = ChatColor.values();
-		return "" + ChatColor.RESET + colours[Math.abs(salt) % colours.length];
+		ChatColor viewerMarker = viewer == Team.RED ? ChatColor.BLACK : ChatColor.WHITE;
+		return "" + ChatColor.RESET + viewerMarker + colours[Math.abs(salt) % colours.length];
 	}
 
 	private String clamp(String s, int max) {

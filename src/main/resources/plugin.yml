@@ -1,0 +1,18 @@
+name: Recored
+main: com.example.recored.RecoredPlugin
+version: ${project.version}
+api-version: '26.2'
+author: InstanceLabs
+description: Team core-destruction minigame - mine the enemy team's cores while defending your own.
+website: https://github.com/Arda501/Recored
+commands:
+  recored:
+    description: Recored main command
+    usage: /recored <join|leave|status|...>
+permissions:
+  recored.play:
+    description: Allows joining Recored
+    default: true
+  recored.admin:
+    description: Allows setting up and administrating Recored
+    default: op
